@@ -1,0 +1,32 @@
+{
+  "_comment": "Hydrostatic expansion with PSF blur and Poisson shot noise",
+
+  "volume": {
+    "volume_size": [128, 128, 64],
+    "voxel_size": [0.5, 0.5, 1.0],
+    "bead_density": 0.002,
+    "bead_radius": 2.5,
+    "bead_peak_intensity": 1.0,
+    "background_noise": 0.03,
+    "poisson_noise": true,
+    "psf_sigma": [0.5, 0.5, 1.0],
+    "bit_depth": 16
+  },
+
+  "deformation": {
+    "modes": {
+      "hydrostatic": 1.10
+    },
+    "total_time": 6.0,
+    "capture_interval": 3.0
+  },
+
+  "workflow": {
+    "output": "./run_hydro_noisy",
+    "generate": true,
+    "analyse": true,
+    "plot": true,
+    "seed": 123,
+    "verbose": false
+  }
+}

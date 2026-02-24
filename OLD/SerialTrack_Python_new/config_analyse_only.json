@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Skip generation, just analyse + plot existing data.",
+    "Point 'output' at a folder that already contains",
+    "frame_NNNN/ directories and ground_truth.npz.",
+    "",
+    "The volume and deformation sections must still match the",
+    "original generation parameters so detection and tracking",
+    "configs are set correctly."
+  ],
+
+  "volume": {
+    "volume_size": [128, 128, 128],
+    "voxel_size": [0.5, 0.5, 1.0],
+    "bead_density": 0.002,
+    "bead_radius": 1.5,
+    "background_noise": 0.02
+  },
+
+  "deformation": {
+    "modes": {
+      "shear_xy": 0.15
+    },
+    "total_time": 10.0,
+    "capture_interval": 2.0
+  },
+
+  "workflow": {
+    "output": "./run_shear",
+    "generate": false,
+    "analyse": true,
+    "plot": true,
+    "seed": 42,
+    "verbose": false
+  }
+}
