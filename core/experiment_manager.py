@@ -249,9 +249,26 @@ class ExperimentManager(QObject):
         d = src.to_dict()
         d.pop("exp_id"); d.pop("timestamp")
         d["name"] = f"{src.name} (copy)"
-        d["status"] = "configured"
-        d["postprocess_runs"] = []; d["stress_runs"] = []
         new = ExperimentRecord.from_dict(d)
+
+        # Deep-copy in-memory data caches so the copy is independent
+        import copy
+        new._tracking_session = src._tracking_session  # shared ref OK (read-only)
+        if src._postprocess_results:
+            new._postprocess_results = copy.deepcopy(src._postprocess_results)
+        if src._stress_results:
+            new._stress_results = copy.deepcopy(src._stress_results)
+        if src._image_volumes is not None:
+            new._image_volumes = [v.copy() if hasattr(v, 'copy') else v
+                                   for v in src._image_volumes]
+        if src._frame_data is not None:
+            new._frame_data = copy.deepcopy(src._frame_data)
+        # Transient per-page state stored on the record
+        if hasattr(src, '_detection_coords') and src._detection_coords is not None:
+            new._detection_coords = src._detection_coords.copy()
+        if hasattr(src, '_mask_array') and src._mask_array is not None:
+            new._mask_array = src._mask_array.copy()
+
         self._records[new.exp_id] = new
         self._order.append(new.exp_id)
         self.experiment_added.emit(new.exp_id)

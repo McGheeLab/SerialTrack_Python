@@ -275,3 +275,23 @@ class ParametersPage(QWidget):
 
     def on_activated(self):
         pass
+
+    def save_to_experiment(self, exp):
+        """Persist all parameter values into the experiment record."""
+        exp.tracking_config = self.get_config()
+
+    def load_from_experiment(self, exp):
+        """Restore parameter values from the experiment record."""
+        cfg = exp.tracking_config
+        if cfg:
+            for editor in [self.tracking_params, self.solver_params,
+                          self.outlier_params, self.strain_params,
+                          self.scale_params, self.traj_params]:
+                editor.set_values(cfg)
+        else:
+            # Reset all editors to their default values
+            for editor in [self.tracking_params, self.solver_params,
+                          self.outlier_params, self.strain_params,
+                          self.scale_params, self.traj_params]:
+                if hasattr(editor, 'reset_defaults'):
+                    editor.reset_defaults()

@@ -44,9 +44,11 @@ class MainWindow(QMainWindow):
 
         self.exp_manager = ExperimentManager(self)
         self.tooltip_bar = TooltipBar()
+        self._switching = False  # Guard: prevents re-entrant experiment switching
 
         self._build_ui()
         self._connect_signals()
+        self._register_tooltips()
 
         # Create a default experiment
         self.exp_manager.create_experiment("Untitled Experiment")
@@ -271,37 +273,69 @@ class MainWindow(QMainWindow):
         """Called when user clicks an experiment in the timeline.
 
         Save current page states to old experiment BEFORE the switch.
+        Guarded by _switching to prevent re-entrant calls from signal chains.
         """
+        if self._switching:
+            return
         old_exp = self.exp_manager.active
-        if old_exp:
+        if old_exp and old_exp.exp_id != new_exp_id:
             self._save_page_states(old_exp)
         self.exp_manager.set_active(new_exp_id)
 
     def _on_active_changed(self, old_id, new_id):
-        """Respond to experiment switch: load new experiment state into all pages."""
-        self.timeline.select_experiment(new_id)
-        new_exp = self.exp_manager.get(new_id)
-        if new_exp:
-            self._load_page_states(new_exp)
-        self.status_text.setText(f"Experiment: {new_exp.name if new_exp else new_id}")
+        """Respond to experiment switch: load new experiment state into all pages.
+
+        Sets _switching guard to prevent the circular chain:
+        select_experiment → currentItemChanged → experiment_selected →
+        _request_switch → _save_page_states (would overwrite loaded data).
+
+        If _switching is already True (e.g. during _load_session), we're being
+        called from an outer guarded context — skip the load here since the
+        outer caller will handle it.
+        """
+        if self._switching:
+            # We're inside _load_session or another guarded block.
+            # Just update the timeline selection; the caller will load pages.
+            self.timeline.select_experiment(new_id)
+            return
+
+        self._switching = True
+        try:
+            self.timeline.select_experiment(new_id)
+            new_exp = self.exp_manager.get(new_id)
+            if new_exp:
+                self._load_page_states(new_exp)
+            self.status_text.setText(
+                f"Experiment: {new_exp.name if new_exp else new_id}")
+        finally:
+            self._switching = False
 
     def _save_page_states(self, exp):
         """Ask every page to save its current state to the experiment record."""
-        for page in self.pages.values():
-            if hasattr(page, "save_to_experiment"):
-                try:
+        for key, page in self.pages.items():
+            try:
+                if hasattr(page, "save_to_experiment"):
                     page.save_to_experiment(exp)
-                except Exception as e:
-                    print(f"[save_to_experiment] {page.__class__.__name__}: {e}")
+                elif hasattr(page, "get_config"):
+                    # Legacy pages that expose config via get_config()
+                    cfg = page.get_config()
+                    if key == "parameters":
+                        exp.tracking_config = cfg
+                    elif key == "detection":
+                        exp.detection_config = cfg
+            except Exception as e:
+                print(f"[save_to_experiment] {page.__class__.__name__}: {e}")
 
     def _load_page_states(self, exp):
         """Ask every page to load state from the experiment record."""
-        for page in self.pages.values():
-            if hasattr(page, "load_from_experiment"):
-                try:
+        for key, page in self.pages.items():
+            try:
+                if hasattr(page, "load_from_experiment"):
                     page.load_from_experiment(exp)
-                except Exception as e:
-                    print(f"[load_from_experiment] {page.__class__.__name__}: {e}")
+                elif hasattr(page, "on_experiment_changed"):
+                    page.on_experiment_changed(exp.exp_id)
+            except Exception as e:
+                print(f"[load_from_experiment] {page.__class__.__name__}: {e}")
 
     def _on_exp_added(self, exp_id):
         rec = self.exp_manager.get(exp_id)
@@ -318,7 +352,13 @@ class MainWindow(QMainWindow):
 
     def _on_exp_action(self, exp_id, action):
         if action == "duplicate":
-            self.exp_manager.duplicate(exp_id)
+            # Make sure current page state is saved before duplicating
+            src = self.exp_manager.get(exp_id)
+            if src and self.exp_manager.active_id == exp_id:
+                self._save_page_states(src)
+            new_rec = self.exp_manager.duplicate(exp_id)
+            if new_rec:
+                self.exp_manager.set_active(new_rec.exp_id)
         elif action == "delete":
             reply = QMessageBox.question(
                 self, "Delete Experiment",
@@ -344,7 +384,9 @@ class MainWindow(QMainWindow):
             self, "New Experiment", "Experiment name:",
             text=f"Experiment {self.exp_manager.count + 1}")
         if ok and name:
-            self.exp_manager.create_experiment(name)
+            rec = self.exp_manager.create_experiment(name)
+            # Always switch to the new (empty) experiment so pages reset
+            self.exp_manager.set_active(rec.exp_id)
 
     def _save_session(self):
         # Save current page states before writing to disk
@@ -364,13 +406,39 @@ class MainWindow(QMainWindow):
     def _load_session(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Session", "", "SerialTrack Session (*.stk);;All Files (*)")
-        if path:
-            try:
-                self.timeline.list_widget.clear()
-                self.exp_manager.load_session(path)
+        if not path:
+            return
+
+        try:
+            # Save current state before replacing everything
+            old_exp = self.exp_manager.active
+            if old_exp:
+                self._save_page_states(old_exp)
+
+            # Set guard: prevent ALL spurious switching during bulk load.
+            # load_session adds experiments to timeline which fires
+            # currentItemChanged → _request_switch. The guard blocks that.
+            self._switching = True
+            self.timeline.list_widget.clear()
+            self.exp_manager.load_session(path)
+
+            # Still under guard: select and load the active experiment.
+            # Guard stays on so select_experiment's currentItemChanged
+            # doesn't trigger _request_switch (which would save stale
+            # page state over the freshly loaded experiment data).
+            active_exp = self.exp_manager.active
+            if active_exp:
+                self.timeline.select_experiment(active_exp.exp_id)
+                self._load_page_states(active_exp)
+                self.status_text.setText(
+                    f"Loaded: {Path(path).name} — {active_exp.name}")
+            else:
                 self.status_text.setText(f"Session loaded: {Path(path).name}")
-            except Exception as e:
-                QMessageBox.warning(self, "Load Error", str(e))
+
+            self._switching = False
+        except Exception as e:
+            self._switching = False
+            QMessageBox.warning(self, "Load Error", str(e))
 
     # ═══════════════════════════════════════════════════════════
     #  Status helpers
@@ -385,3 +453,99 @@ class MainWindow(QMainWindow):
         self.global_progress.setVisible(visible)
         self.global_progress.setMaximum(maximum)
         self.global_progress.setValue(value)
+
+    # ═══════════════════════════════════════════════════════════
+    #  Tooltip Registration
+    # ═══════════════════════════════════════════════════════════
+
+    def _register_tooltips(self):
+        """Register page widgets with the tooltip bar for bottom-panel display."""
+        tb = self.tooltip_bar
+
+        # Nav buttons
+        for key, btn in self.nav_buttons.items():
+            from widgets.common import get_tooltip
+            text = get_tooltip("nav", key)
+            if text:
+                tb.register_widget(btn, text)
+
+        # Experiments timeline
+        tb.register_page_widgets("experiments", {
+            "btn_new": self.timeline.btn_new,
+            "btn_save": self.timeline.btn_save,
+            "btn_load": self.timeline.btn_load,
+        })
+
+        # Images page
+        p = self.pages.get("images")
+        if p:
+            tb.register_page_widgets("images_page", {
+                "btn_load_files": getattr(p, "btn_load_files", None),
+                "btn_load_folder": getattr(p, "btn_load_folder", None),
+                "method_combo": getattr(p, "method_combo", None),
+                "btn_add_step": getattr(p, "btn_add_step", None),
+                "btn_remove_step": getattr(p, "btn_remove_step", None),
+                "btn_clear_pipeline": getattr(p, "btn_clear_pipeline", None),
+                "btn_run_enhance": getattr(p, "btn_run_enhance", None),
+                "btn_revert": getattr(p, "btn_revert", None),
+            })
+
+        # Detection page
+        p = self.pages.get("detection")
+        if p:
+            tb.register_page_widgets("detection_page", {
+                "btn_detect": getattr(p, "btn_detect", None),
+                "btn_detect_all": getattr(p, "btn_detect_all", None),
+            })
+
+        # Analysis page
+        p = self.pages.get("analysis")
+        if p:
+            tb.register_page_widgets("analysis_page", {
+                "btn_run": getattr(p, "btn_run", None),
+                "btn_cancel": getattr(p, "btn_cancel", None),
+            })
+
+        # Post-process page
+        p = self.pages.get("postprocess")
+        if p:
+            tb.register_page_widgets("postprocess_page", {
+                "btn_run": getattr(p, "btn_run", None),
+                "sb_frame": getattr(p, "sb_frame", None),
+                "cb_view": getattr(p, "cb_view", None),
+            })
+
+        # Stress page
+        p = self.pages.get("stress")
+        if p:
+            tb.register_page_widgets("stress_page", {
+                "cb_model": getattr(p, "cb_model", None),
+                "btn_run": getattr(p, "btn_run", None),
+                "sb_frame": getattr(p, "sb_frame", None),
+                "cb_view": getattr(p, "cb_view", None),
+            })
+
+        # Plots page
+        p = self.pages.get("plots")
+        if p:
+            tb.register_page_widgets("plots_page", {
+                "cb_source": getattr(p, "cb_source", None),
+                "cb_component": getattr(p, "cb_component", None),
+                "sb_frame": getattr(p, "sb_frame", None),
+                "sl_z": getattr(p, "sl_z", None),
+                "cb_plot_type": getattr(p, "cb_plot_type", None),
+                "sb_quiver_skip": getattr(p, "sb_quiver_skip", None),
+                "dsb_quiver_scale": getattr(p, "dsb_quiver_scale", None),
+                "sb_contour_levels": getattr(p, "sb_contour_levels", None),
+                "cb_cmap_cat": getattr(p, "cb_cmap_cat", None),
+                "cb_cmap": getattr(p, "cb_cmap", None),
+                "chk_reverse": getattr(p, "chk_reverse", None),
+                "chk_auto_range": getattr(p, "chk_auto_range", None),
+                "dsb_vmin": getattr(p, "dsb_vmin", None),
+                "dsb_vmax": getattr(p, "dsb_vmax", None),
+                "chk_grid": getattr(p, "chk_grid", None),
+                "sb_dpi": getattr(p, "sb_dpi", None),
+                "cb_format": getattr(p, "cb_format", None),
+                "sb_font_size": getattr(p, "sb_font_size", None),
+                "cb_font_family": getattr(p, "cb_font_family", None),
+            })

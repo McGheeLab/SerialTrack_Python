@@ -360,3 +360,59 @@ class MaskPage(QWidget):
                     self.z_to.setRange(0, nz - 1)
                     self.z_to.setValue(nz - 1)
                 self._redraw()
+
+    def save_to_experiment(self, exp):
+        """Persist mask config and data into the experiment record."""
+        cfg = {
+            "z_from": self.z_from.value(),
+            "z_to": self.z_to.value(),
+            "all_z": self.cb_all_z.isChecked(),
+            "shape_tool": self.shape_combo.currentText(),
+            "mode_add": self.rb_add.isChecked(),
+        }
+        exp.mask_config = cfg
+        # Store mask array in experiment cache
+        if hasattr(exp, '_mask_array'):
+            exp._mask_array = self._mask
+        else:
+            exp._mask_array = self._mask
+
+    def load_from_experiment(self, exp):
+        """Restore mask from experiment record."""
+        cfg = exp.mask_config
+        if cfg:
+            self.z_from.setValue(cfg.get("z_from", 0))
+            self.z_to.setValue(cfg.get("z_to", 0))
+            self.cb_all_z.setChecked(cfg.get("all_z", True))
+            idx = self.shape_combo.findText(cfg.get("shape_tool", "Rectangle"))
+            if idx >= 0:
+                self.shape_combo.setCurrentIndex(idx)
+            if cfg.get("mode_add", True):
+                self.rb_add.setChecked(True)
+            else:
+                self.rb_sub.setChecked(True)
+
+        # Restore mask array
+        self._mask = getattr(exp, '_mask_array', None)
+
+        # Reload image from images page and redraw
+        if self.main_window and "images" in self.main_window.pages:
+            vols = self.main_window.pages["images"].get_volumes()
+            if vols:
+                self._current_image = vols[0]
+            else:
+                self._current_image = None
+        else:
+            self._current_image = None
+
+        if self._current_image is not None:
+            if self._current_image.ndim == 3:
+                nz = self._current_image.shape[2]
+                self.z_from.setRange(0, nz - 1)
+                self.z_to.setRange(0, nz - 1)
+                self.z_to.setValue(nz - 1)
+            self._redraw()
+        else:
+            # No image: clear canvas
+            self.canvas.clear()
+            self.canvas.draw()

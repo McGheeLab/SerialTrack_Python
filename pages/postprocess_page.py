@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QGroupBox,
     QPushButton, QLabel, QComboBox, QScrollArea, QProgressBar,
     QTabWidget, QFrame, QMessageBox, QCheckBox, QListWidget,
-    QListWidgetItem, QTextEdit,
+    QListWidgetItem, QTextEdit, QSpinBox, QSlider,
 )
 from PySide6.QtCore import Qt, Signal, QThread
 
@@ -68,7 +68,7 @@ class PostProcessWorker(QThread):
                     continue
 
                 coords = res.coords_b[tracked]
-                disp = -res.disp_b2a[tracked]  # a→b displacement
+                disp = -res.disp_b2a[tracked]  # a->b displacement
 
                 # Validation: remove large displacements
                 disp_mag = np.linalg.norm(disp, axis=1)
@@ -130,7 +130,7 @@ class PostProcessPage(QWidget):
 
         splitter = QSplitter(Qt.Horizontal)
 
-        # ── Controls ──────────────────────────────────────────
+        # -- Controls --------------------------------------------------
         ctrl_scroll = QScrollArea()
         ctrl_scroll.setWidgetResizable(True)
         ctrl_scroll.setMaximumWidth(400)
@@ -144,7 +144,7 @@ class PostProcessPage(QWidget):
         self.grid_params = ParamEditor()
         self.grid_params.set_params([
             ParamSpec("grid_step", "Grid Step (px)", "float", 10.0, 1.0, 100.0, 1.0,
-                      tooltip="Grid spacing for scatter→grid interpolation.\n"
+                      tooltip="Grid spacing for scatter->grid interpolation.\n"
                               "Smaller = finer resolution but noisier."),
             ParamSpec("smoothness", "Smoothness", "float", 1e-3, 1e-8, 10.0, 1e-4,
                       tooltip="Regularization smoothness for gridding.\n"
@@ -158,9 +158,9 @@ class PostProcessPage(QWidget):
         scale_lay = QVBoxLayout(scale_grp)
         self.scale_params = ParamEditor()
         self.scale_params.set_params([
-            ParamSpec("xstep", "X Step (µm/px)", "float", 1.0, 0.001, 100.0, 0.01),
-            ParamSpec("ystep", "Y Step (µm/px)", "float", 1.0, 0.001, 100.0, 0.01),
-            ParamSpec("zstep", "Z Step (µm/px)", "float", 1.0, 0.001, 100.0, 0.01),
+            ParamSpec("xstep", "X Step (um/px)", "float", 1.0, 0.001, 100.0, 0.01),
+            ParamSpec("ystep", "Y Step (um/px)", "float", 1.0, 0.001, 100.0, 0.01),
+            ParamSpec("zstep", "Z Step (um/px)", "float", 1.0, 0.001, 100.0, 0.01),
             ParamSpec("tstep", "Time Step (s)", "float", 1.0, 0.001, 3600.0, 0.1),
         ])
         scale_lay.addWidget(self.scale_params)
@@ -174,7 +174,7 @@ class PostProcessPage(QWidget):
             ParamSpec("max_disp_threshold", "Max Displacement (px)", "float",
                       100.0, 1.0, 10000.0, 10.0,
                       tooltip="Displacements larger than this are removed as outliers."),
-            ParamSpec("max_velocity_threshold", "Max Velocity (µm/s)", "float",
+            ParamSpec("max_velocity_threshold", "Max Velocity (um/s)", "float",
                       1000.0, 0.1, 100000.0, 10.0,
                       tooltip="Velocities larger than this are flagged."),
         ])
@@ -198,7 +198,7 @@ class PostProcessPage(QWidget):
         ctrl_layout.addWidget(out_grp)
 
         # Run
-        self.btn_run = QPushButton("▶  Run Post-Processing")
+        self.btn_run = QPushButton("Run Post-Processing")
         self.btn_run.setObjectName("successBtn")
         self.btn_run.clicked.connect(self._run_postprocess)
         ctrl_layout.addWidget(self.btn_run)
@@ -219,9 +219,49 @@ class PostProcessPage(QWidget):
         ctrl_scroll.setWidget(ctrl_widget)
         splitter.addWidget(ctrl_scroll)
 
-        # ── Results viewer ────────────────────────────────────
+        # -- Results viewer --------------------------------------------
         right = QWidget()
         right_lay = QVBoxLayout(right)
+
+        # Frame / view / z controls above the canvas
+        view_bar = QHBoxLayout()
+
+        view_bar.addWidget(QLabel("Frame:"))
+        self.sb_frame = QSpinBox()
+        self.sb_frame.setMinimum(0)
+        self.sb_frame.setMaximum(0)
+        self.sb_frame.valueChanged.connect(self._update_preview)
+        view_bar.addWidget(self.sb_frame)
+
+        view_bar.addWidget(QLabel("View:"))
+        self.cb_view = QComboBox()
+        self.cb_view.addItems([
+            "Displacement (all)",
+            "u_x", "u_y", "u_z",
+            "Velocity (all)",
+            "v_x", "v_y", "v_z",
+            "Strain e_xx", "Strain e_yy", "Strain e_zz",
+            "Strain e_xy", "Strain e_xz", "Strain e_yz",
+        ])
+        self.cb_view.currentIndexChanged.connect(self._update_preview)
+        view_bar.addWidget(self.cb_view)
+
+        view_bar.addWidget(QLabel("Z:"))
+        self.sl_z = QSlider(Qt.Horizontal)
+        self.sl_z.setMinimum(0)
+        self.sl_z.setMaximum(0)
+        self.sl_z.setMaximumWidth(120)
+        self.sl_z.valueChanged.connect(self._update_preview)
+        view_bar.addWidget(self.sl_z)
+        self.lbl_z = QLabel("0")
+        self.lbl_z.setMinimumWidth(24)
+        view_bar.addWidget(self.lbl_z)
+
+        self.status = StatusIndicator()
+        view_bar.addWidget(self.status)
+        view_bar.addStretch()
+
+        right_lay.addLayout(view_bar)
 
         self.result_canvas = MplCanvas(figsize=(8, 6), toolbar=True)
         right_lay.addWidget(self.result_canvas)
@@ -235,6 +275,8 @@ class PostProcessPage(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter)
+
+    # -- Run -----------------------------------------------------------
 
     def _run_postprocess(self):
         if not self.main_window:
@@ -255,6 +297,7 @@ class PostProcessPage(QWidget):
         self.pp_progress.setVisible(True)
         self.pp_progress.setValue(0)
         self.btn_run.setEnabled(False)
+        self.status.set_status("running", "Computing...")
         self.log_edit.clear()
 
         self._worker = PostProcessWorker(session, config)
@@ -268,7 +311,7 @@ class PostProcessPage(QWidget):
         self._results = results
         self.pp_progress.setVisible(False)
         self.btn_run.setEnabled(True)
-        self.log_edit.append("\n✓ Post-processing complete!")
+        self.log_edit.append("\nPost-processing complete!")
 
         # Add to history
         record = PostProcessRecord(
@@ -288,51 +331,142 @@ class PostProcessPage(QWidget):
                 exp.store_postprocess_results(results)
                 self.main_window.exp_manager.update(exp.exp_id)
 
-        # Quick preview plot
-        self._preview_results(results)
+        # Update frame range and show preview
+        n_frames = len(results.get("frames", []))
+        self.sb_frame.setMaximum(max(0, n_frames - 1))
+        self.status.set_status("ready", f"{n_frames} frames computed")
+        self._update_preview()
 
     def _on_error(self, msg):
         self.pp_progress.setVisible(False)
         self.btn_run.setEnabled(True)
-        self.log_edit.append(f"\n❌ Error: {msg}")
+        self.status.set_status("error", "Failed")
+        self.log_edit.append(f"\nError: {msg}")
         QMessageBox.warning(self, "Post-Processing Error", msg)
 
-    def _preview_results(self, results):
-        """Show a quick preview of the computed fields."""
-        self.result_canvas.clear()
+    # -- Preview -------------------------------------------------------
 
-        valid_frames = [f for f in results.get("frames", []) if f is not None]
-        if not valid_frames:
+    def _update_preview(self):
+        """Render the selected view / frame / z-slice on the canvas."""
+        if not self._results or not self._results.get("frames"):
             return
 
-        # Show last frame's displacement field
-        last = valid_frames[-1]
-        disp = np.array(last["disp_components"])
-        ndim = disp.shape[0]
+        frame_idx = self.sb_frame.value()
+        frames = self._results["frames"]
+        if frame_idx >= len(frames) or frames[frame_idx] is None:
+            self.result_canvas.clear()
+            self.result_canvas.draw()
+            self.status.set_status("warning", f"Frame {frame_idx}: no data")
+            return
 
-        if ndim >= 2:
-            n_plots = min(ndim, 3)
-            labels = ["u_x", "u_y", "u_z"][:n_plots]
+        frame = frames[frame_idx]
+        view = self.cb_view.currentText()
 
-            for i in range(n_plots):
-                ax = self.result_canvas.add_subplot(1, n_plots, i + 1)
-                comp = disp[i]
-                if comp.ndim == 3:
-                    comp = comp[:, :, comp.shape[2]//2]
-                im = ax.imshow(comp.T, cmap="coolwarm", origin="lower")
-                ax.set_title(labels[i], color="#f8f8f2", fontsize=10)
-                from mpl_toolkits.axes_grid1 import make_axes_locatable
-                divider = make_axes_locatable(ax)
-                cax = divider.append_axes("right", size="4%", pad=0.05)
-                self.result_canvas.figure.colorbar(im, cax=cax)
+        self.result_canvas.clear()
+
+        try:
+            if view.startswith("Displacement") or view.startswith("u_"):
+                self._plot_vector_field(frame, "disp_components",
+                                        ["u_x", "u_y", "u_z"], view, frame_idx)
+            elif view.startswith("Velocity") or view.startswith("v_"):
+                key = "velocity" if "velocity" in frame else "disp_components"
+                self._plot_vector_field(frame, key,
+                                        ["v_x", "v_y", "v_z"], view, frame_idx)
+            elif view.startswith("Strain"):
+                self._plot_strain_component(frame, view, frame_idx)
+            else:
+                self._plot_vector_field(frame, "disp_components",
+                                        ["u_x", "u_y", "u_z"],
+                                        "Displacement (all)", frame_idx)
+        except Exception as e:
+            ax = self.result_canvas.add_subplot(1, 1, 1)
+            ax.text(0.5, 0.5, f"Preview error:\n{e}", transform=ax.transAxes,
+                    ha="center", va="center", color=Settings.ACCENT_RED,
+                    fontsize=10)
 
         self.result_canvas.draw()
+
+    def _get_2d_slice(self, arr):
+        """If 3D, take Z-slice; update Z slider range."""
+        if arr.ndim == 3:
+            nz = arr.shape[2]
+            self.sl_z.setMaximum(max(0, nz - 1))
+            z = min(self.sl_z.value(), nz - 1)
+            self.lbl_z.setText(str(z))
+            return arr[:, :, z]
+        self.sl_z.setMaximum(0)
+        self.lbl_z.setText("0")
+        return arr
+
+    def _add_colorbar(self, ax, im, label=""):
+        """Add a compact colorbar."""
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="3%", pad=0.08)
+        cbar = self.result_canvas.figure.colorbar(im, cax=cax)
+        if label:
+            cbar.set_label(label, fontsize=8, color=Settings.FG_SECONDARY)
+        cbar.ax.tick_params(labelsize=7, colors="#b0b0b0")
+
+    def _plot_vector_field(self, frame, key, labels, view, frame_idx):
+        """Plot displacement or velocity components."""
+        data = np.array(frame[key])
+        ndim = data.shape[0]
+
+        # Single component
+        comp_map = {
+            "u_x": 0, "u_y": 1, "u_z": 2,
+            "v_x": 0, "v_y": 1, "v_z": 2,
+        }
+        for suffix, idx in comp_map.items():
+            if view == suffix and idx < ndim:
+                ax = self.result_canvas.add_subplot(1, 1, 1)
+                comp = self._get_2d_slice(data[idx])
+                im = ax.imshow(comp.T, cmap="coolwarm", origin="lower",
+                               aspect="equal")
+                ax.set_title(f"{suffix} -- Frame {frame_idx}",
+                             color=Settings.FG_PRIMARY, fontsize=10)
+                self._add_colorbar(ax, im, suffix)
+                return
+
+        # All components side by side
+        n_plots = min(ndim, 3)
+        for i in range(n_plots):
+            ax = self.result_canvas.add_subplot(1, n_plots, i + 1)
+            comp = self._get_2d_slice(data[i])
+            im = ax.imshow(comp.T, cmap="coolwarm", origin="lower",
+                           aspect="equal")
+            ax.set_title(f"{labels[i]} -- F{frame_idx}",
+                         color=Settings.FG_PRIMARY, fontsize=10)
+            self._add_colorbar(ax, im, labels[i])
+
+    def _plot_strain_component(self, frame, view, frame_idx):
+        """Plot a single strain tensor component."""
+        eps = np.array(frame["eps_tensor"])
+        ndim = eps.shape[0]
+
+        comp_map = {
+            "Strain e_xx": (0, 0), "Strain e_yy": (1, 1), "Strain e_zz": (2, 2),
+            "Strain e_xy": (0, 1), "Strain e_xz": (0, 2), "Strain e_yz": (1, 2),
+        }
+        ij = comp_map.get(view, (0, 0))
+        if ij[0] >= ndim or ij[1] >= ndim:
+            ij = (0, 0)
+
+        ax = self.result_canvas.add_subplot(1, 1, 1)
+        comp = self._get_2d_slice(eps[ij[0], ij[1]])
+        im = ax.imshow(comp.T, cmap="coolwarm", origin="lower", aspect="equal")
+        label = view.replace("Strain ", "")
+        ax.set_title(f"{label} -- Frame {frame_idx}",
+                     color=Settings.FG_PRIMARY, fontsize=10)
+        self._add_colorbar(ax, im, label)
+
+    # -- Public API ----------------------------------------------------
 
     def get_results(self) -> Dict[str, Any]:
         return self._results
 
     def on_experiment_changed(self, exp_id: str):
-        # Load history for this experiment
         self.history_list.clear()
         if self.main_window:
             exp = self.main_window.exp_manager.get(exp_id)
@@ -345,7 +479,7 @@ class PostProcessPage(QWidget):
     def on_activated(self):
         pass
 
-    # ── Experiment switching ──────────────────────────────────
+    # -- Experiment switching ------------------------------------------
 
     def save_to_experiment(self, exp):
         """Persist current post-process results into experiment cache."""
@@ -358,7 +492,6 @@ class PostProcessPage(QWidget):
         # Refresh history list
         self.history_list.clear()
         for r in exp.postprocess_runs:
-            from PySide6.QtWidgets import QListWidgetItem
             item = QListWidgetItem(f"[{r.timestamp}] {r.description}")
             item.setData(Qt.UserRole, r.record_id)
             self.history_list.addItem(item)

@@ -1,0 +1,197 @@
+{
+  "version": "2.0",
+  "experiments": [
+    {
+      "exp_id": "4057f100",
+      "name": "ALEXS",
+      "timestamp": "2026-02-24 11:21:31",
+      "status": "complete",
+      "description": "",
+      "image_config": {
+        "n_volumes": 19,
+        "shape": [
+          512,
+          512
+        ],
+        "ndim": 2
+      },
+      "detection_config": {
+        "method": "TracTrac (LoG)",
+        "threshold": 0.5,
+        "bead_radius": 2.0,
+        "min_size": 3,
+        "max_size": 62,
+        "color": "white"
+      },
+      "tracking_config": {
+        "mode": "Cumulative",
+        "f_o_s": 60.0,
+        "n_neighbors_max": 25,
+        "n_neighbors_min": 1,
+        "loc_solver": "Topology",
+        "solver": "ADMM",
+        "smoothness": 0.1,
+        "max_iter": 20,
+        "iter_stop_threshold": 0.01,
+        "outlier_threshold": 5.0,
+        "dist_missing": 5.0,
+        "strain_n_neighbors": 20,
+        "strain_f_o_s": 60.0,
+        "use_prev_results": true,
+        "xstep": 1.0,
+        "ystep": 1.0,
+        "zstep": 1.0,
+        "tstep": 1.0,
+        "traj_dist_threshold": 1.0,
+        "traj_extrap_method": "pchip",
+        "traj_min_segment": 10,
+        "traj_max_gap": 0,
+        "traj_merge_passes": 4
+      },
+      "mask_config": {
+        "z_from": 0,
+        "z_to": 0,
+        "all_z": true,
+        "shape_tool": "Rectangle",
+        "mode_add": true
+      },
+      "enhancement_config": {},
+      "image_paths": [],
+      "output_dir": "",
+      "n_frames": 18,
+      "n_particles_ref": 1501,
+      "mean_tracking_ratio": 0.5120484034980624,
+      "postprocess_runs": [
+        {
+          "record_id": "20b478a9",
+          "timestamp": "2026-02-24 11:23:15",
+          "description": "Grid=10.0, Smooth=0.001",
+          "config": {
+            "grid_step": 10.0,
+            "max_disp_threshold": 30.0,
+            "max_velocity_threshold": 1000.0,
+            "smoothness": 0.001,
+            "tstep": 1.0,
+            "xstep": 1.0,
+            "ystep": 1.0,
+            "zstep": 1.0
+          },
+          "output_dir": ""
+        }
+      ],
+      "stress_runs": [
+        {
+          "record_id": "4fe586fb",
+          "timestamp": "2026-02-24 11:23:40",
+          "description": "Linear Elastic (Isotropic), E=1000.0",
+          "config": {
+            "material": {
+              "model": "Linear Elastic (Isotropic)",
+              "poisson_ratio": 0.45,
+              "youngs_modulus": 1000.0
+            },
+            "model": "Linear Elastic (Isotropic)"
+          },
+          "output_dir": ""
+        }
+      ]
+    },
+    {
+      "exp_id": "897c4a3e",
+      "name": "New",
+      "timestamp": "2026-02-24 11:24:05",
+      "status": "complete",
+      "description": "",
+      "image_config": {
+        "n_volumes": 7,
+        "shape": [
+          512,
+          512
+        ],
+        "ndim": 2
+      },
+      "detection_config": {
+        "method": "TracTrac (LoG)",
+        "threshold": 0.5,
+        "bead_radius": 2.0,
+        "min_size": 3,
+        "max_size": 62,
+        "color": "white"
+      },
+      "tracking_config": {
+        "mode": "Incremental",
+        "f_o_s": 60.0,
+        "n_neighbors_max": 25,
+        "n_neighbors_min": 1,
+        "loc_solver": "Topology",
+        "solver": "Regularization",
+        "smoothness": 0.1,
+        "max_iter": 20,
+        "iter_stop_threshold": 0.01,
+        "outlier_threshold": 5.0,
+        "dist_missing": 5.0,
+        "strain_n_neighbors": 20,
+        "strain_f_o_s": 60.0,
+        "use_prev_results": false,
+        "xstep": 1.0,
+        "ystep": 1.0,
+        "zstep": 1.0,
+        "tstep": 1.0,
+        "traj_dist_threshold": 1.0,
+        "traj_extrap_method": "pchip",
+        "traj_min_segment": 10,
+        "traj_max_gap": 0,
+        "traj_merge_passes": 4
+      },
+      "mask_config": {
+        "z_from": 0,
+        "z_to": 0,
+        "all_z": true,
+        "shape_tool": "Rectangle",
+        "mode_add": true
+      },
+      "enhancement_config": {},
+      "image_paths": [],
+      "output_dir": "",
+      "n_frames": 6,
+      "n_particles_ref": 1399,
+      "mean_tracking_ratio": 0.8660936348468908,
+      "postprocess_runs": [
+        {
+          "record_id": "99532365",
+          "timestamp": "2026-02-24 11:25:44",
+          "description": "Grid=10.0, Smooth=0.001",
+          "config": {
+            "grid_step": 10.0,
+            "max_disp_threshold": 30.0,
+            "max_velocity_threshold": 1000.0,
+            "smoothness": 0.001,
+            "tstep": 1.0,
+            "xstep": 1.0,
+            "ystep": 1.0,
+            "zstep": 1.0
+          },
+          "output_dir": ""
+        }
+      ],
+      "stress_runs": [
+        {
+          "record_id": "0bb7f2c4",
+          "timestamp": "2026-02-24 11:25:54",
+          "description": "Linear Elastic (Isotropic), E=1000.0",
+          "config": {
+            "material": {
+              "model": "Linear Elastic (Isotropic)",
+              "poisson_ratio": 0.45,
+              "youngs_modulus": 1000.0
+            },
+            "model": "Linear Elastic (Isotropic)"
+          },
+          "output_dir": ""
+        }
+      ]
+    }
+  ],
+  "active_id": "897c4a3e",
+  "data_dir": "New_data"
+}

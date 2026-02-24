@@ -323,3 +323,47 @@ class DetectionPage(QWidget):
                         self.z_slider.setRange(0, nz - 1)
                         self.z_slider.setValue(nz // 2)
                     self._redraw()
+
+    def save_to_experiment(self, exp):
+        """Persist detection state into experiment cache."""
+        exp.detection_config = self.det_params.get_values()
+        # Store coords in experiment (transient, not saved to disk)
+        exp._detection_coords = self._coords
+
+    def load_from_experiment(self, exp):
+        """Restore detection state from experiment record."""
+        # Restore detection params
+        if exp.detection_config:
+            self.det_params.set_values(exp.detection_config)
+
+        # Restore coords
+        self._coords = getattr(exp, '_detection_coords', None)
+
+        # Reload image from images page (images page loads first)
+        if self.main_window and "images" in self.main_window.pages:
+            vols = self.main_window.pages["images"].get_volumes()
+            if vols:
+                self._current_image = vols[0]
+            else:
+                self._current_image = None
+        else:
+            self._current_image = None
+
+        # Refresh UI
+        if self._current_image is not None:
+            if self._current_image.ndim == 3:
+                nz = self._current_image.shape[2]
+                self.z_slider.setRange(0, nz - 1)
+                self.z_slider.setValue(nz // 2)
+            n = len(self._coords) if self._coords is not None else 0
+            self.results_label.setText(f"{n} particles loaded")
+            self.results_label.setStyleSheet(
+                f"color: {Settings.ACCENT_GREEN if n > 0 else Settings.FG_SECONDARY};")
+            self._redraw()
+        else:
+            # No image data: clear everything
+            self._coords = None
+            self.canvas.clear()
+            self.canvas.draw()
+            self.results_label.setText("No image data loaded")
+            self.results_label.setStyleSheet(f"color: {Settings.FG_SECONDARY};")

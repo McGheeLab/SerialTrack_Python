@@ -312,9 +312,27 @@ class PlotsPage(QWidget):
         right = QWidget()
         right_lay = QVBoxLayout(right)
 
-        # Refresh button
+        # Top control bar above canvas: frame, z-slice, refresh
         top_row = QHBoxLayout()
-        btn_refresh = QPushButton("🔄  Refresh")
+
+        top_row.addWidget(QLabel("Frame:"))
+        self.sb_frame_top = QSpinBox()
+        self.sb_frame_top.setMinimum(0)
+        self.sb_frame_top.setMaximumWidth(80)
+        self.sb_frame_top.valueChanged.connect(self._sync_frame_from_top)
+        top_row.addWidget(self.sb_frame_top)
+
+        top_row.addWidget(QLabel("Z slice:"))
+        self.sl_z_top = QSlider(Qt.Horizontal)
+        self.sl_z_top.setMinimum(0)
+        self.sl_z_top.setMaximumWidth(140)
+        self.sl_z_top.valueChanged.connect(self._sync_z_from_top)
+        top_row.addWidget(self.sl_z_top)
+        self.lbl_z_top = QLabel("0")
+        self.lbl_z_top.setMinimumWidth(24)
+        top_row.addWidget(self.lbl_z_top)
+
+        btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self._refresh_plot)
         top_row.addWidget(btn_refresh)
 
@@ -377,6 +395,21 @@ class PlotsPage(QWidget):
         self.cb_cmap.clear()
         self.cb_cmap.addItems(COLORMAPS.get(cat, ["viridis"]))
         self.cb_cmap.blockSignals(False)
+
+    def _sync_frame_from_top(self, val):
+        """Sync sidebar frame spinner when the top-bar spinner changes."""
+        self.sb_frame.blockSignals(True)
+        self.sb_frame.setValue(val)
+        self.sb_frame.blockSignals(False)
+        self._refresh_plot()
+
+    def _sync_z_from_top(self, val):
+        """Sync sidebar Z slider when the top-bar slider changes."""
+        self.sl_z.blockSignals(True)
+        self.sl_z.setValue(val)
+        self.sl_z.blockSignals(False)
+        self.lbl_z_top.setText(str(val))
+        self._refresh_plot()
 
     # ───── Data retrieval ─────────────────────────────────────────
 
@@ -531,13 +564,28 @@ class PlotsPage(QWidget):
     def _refresh_plot(self):
         info = self._get_data()
         if info is None:
-            self.status.set_status("warning", "No data available")
+            # No data: clear the canvas so stale plots don't persist
+            self.canvas.clear()
+            self.canvas.draw()
+            self.status.set_status("idle", "No data available")
             return
 
         # Update frame range
         n_frames = info.get("n_frames", 0)
         if n_frames > 0:
             self.sb_frame.setMaximum(n_frames - 1)
+            self.sb_frame_top.setMaximum(n_frames - 1)
+            # Sync top-bar value without triggering signal
+            self.sb_frame_top.blockSignals(True)
+            self.sb_frame_top.setValue(self.sb_frame.value())
+            self.sb_frame_top.blockSignals(False)
+
+        # Sync Z top-bar
+        self.sl_z_top.blockSignals(True)
+        self.sl_z_top.setMaximum(self.sl_z.maximum())
+        self.sl_z_top.setValue(self.sl_z.value())
+        self.sl_z_top.blockSignals(False)
+        self.lbl_z_top.setText(str(self.sl_z.value()))
 
         source = self.cb_source.currentText()
         component = self.cb_component.currentText()

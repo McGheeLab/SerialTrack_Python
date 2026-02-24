@@ -735,7 +735,7 @@ class StressPage(QWidget):
         ax.set_title(title, color=Settings.FG_PRIMARY, fontsize=10)
         from mpl_toolkits.axes_grid1 import make_axes_locatable
         divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="4%", pad=0.05)
+        cax = divider.append_axes("right", size="3%", pad=0.08)
         self.result_canvas.figure.colorbar(im, cax=cax)
         self.result_canvas.draw()
 

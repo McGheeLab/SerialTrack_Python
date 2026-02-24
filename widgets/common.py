@@ -45,10 +45,13 @@ def load_tooltips(path: Optional[str] = None):
     """Load tooltip definitions from JSON file."""
     global _TOOLTIPS
     if path is None:
-        # Try common locations
+        # Try common locations (case-sensitive and insensitive)
         for candidate in [
+            Path(__file__).parent.parent / "Tooltips.json",
             Path(__file__).parent.parent / "tooltips.json",
+            Path(__file__).parent / "Tooltips.json",
             Path(__file__).parent / "tooltips.json",
+            Path("Tooltips.json"),
             Path("tooltips.json"),
         ]:
             if candidate.exists():
@@ -127,6 +130,21 @@ class TooltipBar(QFrame):
         """Register a widget so hovering it shows tooltip_text in this bar."""
         widget.setProperty("_tooltip_bar_text", tooltip_text)
         widget.installEventFilter(self)
+
+    def register_page_widgets(self, page_key: str, widget_map: dict):
+        """Bulk-register widgets from a page using tooltip JSON keys.
+
+        Parameters
+        ----------
+        page_key : str
+            Page key in Tooltips.json (e.g. "images_page")
+        widget_map : dict
+            Maps JSON key -> QWidget instance.
+        """
+        for key, widget in widget_map.items():
+            text = get_tooltip(page_key, key)
+            if text and widget is not None:
+                self.register_widget(widget, text)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Enter:
@@ -302,6 +320,11 @@ class ParamEditor(QWidget):
     def _emit_changed(self, *_):
         self.params_changed.emit(self.get_values())
 
+    def reset_defaults(self):
+        """Reset all widgets to their original default values."""
+        defaults = {spec.name: spec.default for spec in self._specs}
+        self.set_values(defaults)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Image Viewer — 2D/3D slice viewer
@@ -374,6 +397,13 @@ class ImageViewer(QWidget):
         """Set image data. volumes is a list of 2D or 3D arrays (time series)."""
         self._volumes = volumes
         if not volumes:
+            self.canvas.clear()
+            self.canvas.draw()
+            self.z_slider.setRange(0, 0)
+            self.z_slider.setEnabled(False)
+            self.t_slider.setRange(0, 0)
+            self.z_label.setText("0/0")
+            self.t_label.setText("0/0")
             return
 
         nt = len(volumes)

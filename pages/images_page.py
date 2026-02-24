@@ -251,7 +251,8 @@ class ImagesPage(QWidget):
             p = Path(folder)
             files = sorted(
                 list(p.glob("*.tif")) + list(p.glob("*.tiff")) +
-                list(p.glob("*.mat")) + list(p.glob("*.npy"))
+                list(p.glob("*.mat")) + list(p.glob("*.npy")) +
+                list(p.glob("*.nd2"))
             )
             if files:
                 self._start_load([str(f) for f in files])
@@ -398,31 +399,30 @@ class ImagesPage(QWidget):
         vols = self.get_volumes()
         if vols:
             exp.store_image_volumes(vols)
-        # Save image paths
-        paths = []
-        for i in range(self.file_list.count()):
-            paths.append(self.file_list.item(i).text())
-        exp.image_paths = paths
+        # Save image config
+        if vols:
+            exp.image_config = {
+                "n_volumes": len(vols),
+                "shape": list(vols[0].shape) if vols else [],
+                "ndim": vols[0].ndim if vols else 0,
+            }
+            exp.n_frames = len(vols)
 
     def load_from_experiment(self, exp):
-        """Restore volumes and file list from experiment cache."""
+        """Restore volumes from experiment cache."""
         vols = exp.get_image_volumes()
         if vols is not None and len(vols) > 0:
             self._raw_volumes = vols
             self._enhanced_volumes = vols.copy() if hasattr(vols, 'copy') else list(vols)
-            # Update file list
-            self.file_list.clear()
-            for p in exp.image_paths:
-                self.file_list.addItem(p)
-            # Update preview
-            if hasattr(self, 'preview_canvas') and vols:
-                self._show_preview(0)
-            self.status_label.set_status("ready", f"{len(vols)} volumes")
+            # Update viewer
+            self.viewer.set_data(vols)
+            # Update info label
+            info_parts = [f"{len(vols)} volumes"]
+            if vols:
+                info_parts.append(f"shape={vols[0].shape}")
+            self.load_info.setText(" | ".join(info_parts))
         else:
             self._raw_volumes = []
             self._enhanced_volumes = []
-            self.file_list.clear()
-            if hasattr(self, 'preview_canvas'):
-                self.preview_canvas.clear()
-                self.preview_canvas.draw()
-            self.status_label.set_status("idle", "No images")
+            self.viewer.set_data([])
+            self.load_info.setText("No images loaded")
