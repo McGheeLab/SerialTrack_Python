@@ -62,6 +62,7 @@ class ExperimentRecord:
 
     image_paths: List[str] = field(default_factory=list)
     output_dir: str = ""
+    save_path: str = ""  # Path to the .stk file for this experiment
 
     n_frames: int = 0
     n_particles_ref: int = 0
@@ -135,6 +136,7 @@ class ExperimentRecord:
             "enhancement_config": self.enhancement_config,
             "image_paths": self.image_paths,
             "output_dir": self.output_dir,
+            "save_path": self.save_path,
             "n_frames": self.n_frames,
             "n_particles_ref": self.n_particles_ref,
             "mean_tracking_ratio": self.mean_tracking_ratio,
@@ -174,6 +176,7 @@ class ExperimentManager(QObject):
     experiment_updated = Signal(str)
     experiment_removed = Signal(str)
     active_changed = Signal(str, str)
+    auto_saved = Signal(str)  # emits save_path after auto-save
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -432,3 +435,84 @@ class ExperimentManager(QObject):
         d = base / exp_id
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    # ── Single-experiment save/load ────────────────────────
+
+    def save_experiment(self, exp_id: str, path: str = ""):
+        """Save a single experiment to its own .stk file.
+
+        If *path* is given it overrides the record's save_path.
+        The file contains a session manifest with exactly one experiment
+        so it can also be loaded by load_session().
+        """
+        rec = self._records.get(exp_id)
+        if rec is None:
+            return
+        if path:
+            rec.save_path = path
+        if not rec.save_path:
+            return
+
+        p = Path(rec.save_path)
+        data_dir = p.parent / (p.stem + "_data")
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest = {
+            "version": "2.0",
+            "experiments": [rec.to_dict()],
+            "active_id": rec.exp_id,
+            "data_dir": str(data_dir.name),
+        }
+        p.write_text(json.dumps(manifest, indent=2, default=str))
+
+        if rec.has_data():
+            self._save_experiment_npz(rec, data_dir / f"{rec.exp_id}.npz")
+
+        self.auto_saved.emit(str(p))
+
+    def auto_save_active(self):
+        """Save the active experiment to its file (no-op if no save_path)."""
+        if self._active_id:
+            rec = self._records.get(self._active_id)
+            if rec and rec.save_path:
+                self.save_experiment(self._active_id)
+
+    def load_experiment(self, filepath: str):
+        """Load a single experiment from a .stk file and add to timeline.
+
+        Returns the loaded ExperimentRecord, or None on failure.
+        """
+        p = Path(filepath)
+        data = json.loads(p.read_text())
+        data_dir = p.parent / data.get("data_dir", p.stem + "_data")
+
+        exps = data.get("experiments", [])
+        if not exps:
+            return None
+
+        loaded_rec = None
+        for ed in exps:
+            # Ensure save_path is set to this file
+            ed["save_path"] = str(p)
+            rec = ExperimentRecord.from_dict(ed)
+            # Avoid duplicates if the same file is loaded twice
+            if rec.exp_id in self._records:
+                # Update existing record in place
+                old = self._records[rec.exp_id]
+                npz_path = data_dir / f"{rec.exp_id}.npz"
+                if npz_path.exists():
+                    self._load_experiment_npz(rec, npz_path)
+                self._records[rec.exp_id] = rec
+                self.experiment_updated.emit(rec.exp_id)
+                loaded_rec = rec
+                continue
+
+            self._records[rec.exp_id] = rec
+            self._order.append(rec.exp_id)
+            npz_path = data_dir / f"{rec.exp_id}.npz"
+            if npz_path.exists():
+                self._load_experiment_npz(rec, npz_path)
+            self.experiment_added.emit(rec.exp_id)
+            loaded_rec = rec
+
+        return loaded_rec

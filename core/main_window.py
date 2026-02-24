@@ -50,8 +50,8 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._register_tooltips()
 
-        # Create a default experiment
-        self.exp_manager.create_experiment("Untitled Experiment")
+        # Start with no experiment — pages locked until New or Load
+        self._set_pages_locked(True)
 
     # ═══════════════════════════════════════════════════════════
     #  UI Construction
@@ -233,6 +233,10 @@ class MainWindow(QMainWindow):
     def _navigate(self, page_key):
         if page_key not in self.pages:
             return
+
+        # Auto-save when leaving a page (user finished a step)
+        self._auto_save()
+
         for k, btn in self.nav_buttons.items():
             btn.setChecked(k == page_key)
         self.page_stack.setCurrentWidget(self.pages[page_key])
@@ -253,6 +257,29 @@ class MainWindow(QMainWindow):
         if hasattr(page, "on_activated"):
             page.on_activated()
 
+    def _set_pages_locked(self, locked: bool):
+        """Enable/disable nav buttons and page stack.
+
+        When locked (no experiment), only the timeline's New/Load buttons work.
+        """
+        for btn in self.nav_buttons.values():
+            btn.setEnabled(not locked)
+        self.page_stack.setEnabled(not locked)
+        if locked:
+            self.status_text.setText(
+                "Create a New Experiment or Load an existing file to begin.")
+
+    def _auto_save(self):
+        """Save current page states to the active experiment, then write to disk."""
+        if self._switching:
+            return
+        exp = self.exp_manager.active
+        if exp and exp.save_path:
+            self._save_page_states(exp)
+            self.exp_manager.save_experiment(exp.exp_id)
+            self.status_text.setText(
+                f"Auto-saved: {Path(exp.save_path).stem}")
+
     # ═══════════════════════════════════════════════════════════
     #  Experiment switching — the key orchestration
     # ═══════════════════════════════════════════════════════════
@@ -262,6 +289,9 @@ class MainWindow(QMainWindow):
         self.exp_manager.experiment_updated.connect(self._on_exp_updated)
         self.exp_manager.experiment_removed.connect(self._on_exp_removed)
         self.exp_manager.active_changed.connect(self._on_active_changed)
+
+        # Auto-save whenever a page updates the active experiment
+        self.exp_manager.experiment_updated.connect(self._on_exp_data_changed)
 
         self.timeline.experiment_selected.connect(self._request_switch)
         self.timeline.experiment_action.connect(self._on_exp_action)
@@ -347,6 +377,18 @@ class MainWindow(QMainWindow):
         if rec:
             self.timeline.update_experiment(exp_id, rec.name, rec.status)
 
+    def _on_exp_data_changed(self, exp_id):
+        """Auto-save when a page updates experiment data (e.g. after computation)."""
+        if self._switching:
+            return  # Don't auto-save during experiment switching
+        rec = self.exp_manager.get(exp_id)
+        if rec and rec.save_path and rec.exp_id == self.exp_manager.active_id:
+            # Save current page states, then write to disk
+            self._save_page_states(rec)
+            self.exp_manager.save_experiment(rec.exp_id)
+            self.status_text.setText(
+                f"Auto-saved: {Path(rec.save_path).stem}")
+
     def _on_exp_removed(self, exp_id):
         self.timeline.remove_experiment(exp_id)
 
@@ -356,8 +398,19 @@ class MainWindow(QMainWindow):
             src = self.exp_manager.get(exp_id)
             if src and self.exp_manager.active_id == exp_id:
                 self._save_page_states(src)
+
+            # Prompt for save location for the copy
+            default_name = f"{src.name}_copy.stk" if src else "copy.stk"
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Copy As", default_name,
+                "SerialTrack Experiment (*.stk);;All Files (*)")
+            if not path:
+                return
+
             new_rec = self.exp_manager.duplicate(exp_id)
             if new_rec:
+                new_rec.save_path = path
+                self.exp_manager.save_experiment(new_rec.exp_id)
                 self.exp_manager.set_active(new_rec.exp_id)
         elif action == "delete":
             reply = QMessageBox.question(
@@ -375,6 +428,7 @@ class MainWindow(QMainWindow):
                     self.exp_manager.update(exp_id, name=name)
 
     def _new_experiment(self):
+        """Create a new experiment — prompt for name and save location."""
         # Save current experiment state first
         old_exp = self.exp_manager.active
         if old_exp:
@@ -383,59 +437,81 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(
             self, "New Experiment", "Experiment name:",
             text=f"Experiment {self.exp_manager.count + 1}")
-        if ok and name:
-            rec = self.exp_manager.create_experiment(name)
-            # Always switch to the new (empty) experiment so pages reset
-            self.exp_manager.set_active(rec.exp_id)
-
-    def _save_session(self):
-        # Save current page states before writing to disk
-        old_exp = self.exp_manager.active
-        if old_exp:
-            self._save_page_states(old_exp)
+        if not ok or not name:
+            return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Session", "", "SerialTrack Session (*.stk);;All Files (*)")
-        if path:
-            try:
-                self.exp_manager.save_session(path)
-                self.status_text.setText(f"Session saved: {Path(path).name}")
-            except Exception as e:
-                QMessageBox.warning(self, "Save Error", str(e))
+            self, "Save Experiment As",
+            f"{name.replace(' ', '_')}.stk",
+            "SerialTrack Experiment (*.stk);;All Files (*)")
+        if not path:
+            return
+
+        rec = self.exp_manager.create_experiment(name)
+        rec.save_path = path
+        # Write initial (empty) file so the path exists
+        self.exp_manager.save_experiment(rec.exp_id)
+        # Switch to the new experiment (unlocks pages)
+        self.exp_manager.set_active(rec.exp_id)
+        self._set_pages_locked(False)
+        self._navigate("images")
+
+    def _save_session(self):
+        """Manually save the active experiment to its file."""
+        exp = self.exp_manager.active
+        if not exp:
+            QMessageBox.information(
+                self, "Nothing to Save",
+                "Create or load an experiment first.")
+            return
+
+        self._save_page_states(exp)
+
+        if not exp.save_path:
+            # No path yet — prompt
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Experiment As",
+                f"{exp.name.replace(' ', '_')}.stk",
+                "SerialTrack Experiment (*.stk);;All Files (*)")
+            if not path:
+                return
+            exp.save_path = path
+
+        self.exp_manager.save_experiment(exp.exp_id)
+        self.status_text.setText(f"Saved: {Path(exp.save_path).name}")
 
     def _load_session(self):
+        """Load an experiment from a .stk file."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Session", "", "SerialTrack Session (*.stk);;All Files (*)")
+            self, "Load Experiment", "",
+            "SerialTrack Experiment (*.stk);;All Files (*)")
         if not path:
             return
 
         try:
-            # Save current state before replacing everything
+            # Save current state before switching
             old_exp = self.exp_manager.active
             if old_exp:
                 self._save_page_states(old_exp)
 
-            # Set guard: prevent ALL spurious switching during bulk load.
-            # load_session adds experiments to timeline which fires
-            # currentItemChanged → _request_switch. The guard blocks that.
             self._switching = True
-            self.timeline.list_widget.clear()
-            self.exp_manager.load_session(path)
-
-            # Still under guard: select and load the active experiment.
-            # Guard stays on so select_experiment's currentItemChanged
-            # doesn't trigger _request_switch (which would save stale
-            # page state over the freshly loaded experiment data).
-            active_exp = self.exp_manager.active
-            if active_exp:
-                self.timeline.select_experiment(active_exp.exp_id)
-                self._load_page_states(active_exp)
-                self.status_text.setText(
-                    f"Loaded: {Path(path).name} — {active_exp.name}")
-            else:
-                self.status_text.setText(f"Session loaded: {Path(path).name}")
-
+            rec = self.exp_manager.load_experiment(path)
             self._switching = False
+
+            if rec:
+                # Switch to the loaded experiment
+                self._switching = True
+                self.exp_manager.set_active(rec.exp_id)
+                self.timeline.select_experiment(rec.exp_id)
+                self._load_page_states(rec)
+                self._switching = False
+
+                self._set_pages_locked(False)
+                self.status_text.setText(
+                    f"Loaded: {Path(path).name} — {rec.name}")
+            else:
+                QMessageBox.warning(
+                    self, "Load Error", "No experiment data found in file.")
         except Exception as e:
             self._switching = False
             QMessageBox.warning(self, "Load Error", str(e))
@@ -453,6 +529,16 @@ class MainWindow(QMainWindow):
         self.global_progress.setVisible(visible)
         self.global_progress.setMaximum(maximum)
         self.global_progress.setValue(value)
+
+    def closeEvent(self, event):
+        """Auto-save all open experiments before closing."""
+        for exp_id in list(self.exp_manager._order):
+            rec = self.exp_manager.get(exp_id)
+            if rec and rec.save_path:
+                if rec.exp_id == self.exp_manager.active_id:
+                    self._save_page_states(rec)
+                self.exp_manager.save_experiment(exp_id)
+        event.accept()
 
     # ═══════════════════════════════════════════════════════════
     #  Tooltip Registration

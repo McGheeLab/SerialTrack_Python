@@ -425,7 +425,10 @@ class PlotsPage(QWidget):
             pp_page = self.main_window.pages.get("postprocess")
             pp_res = pp_page.get_results() if pp_page else {}
             frames = pp_res.get("frames", [])
-            if frame_idx >= len(frames) or frames[frame_idx] is None:
+            if not frames:
+                return None
+            frame_idx = min(frame_idx, len(frames) - 1)
+            if frames[frame_idx] is None:
                 return None
             frame = frames[frame_idx]
             disp = np.array(frame["disp_components"])
@@ -452,7 +455,10 @@ class PlotsPage(QWidget):
             pp_page = self.main_window.pages.get("postprocess")
             pp_res = pp_page.get_results() if pp_page else {}
             frames = pp_res.get("frames", [])
-            if frame_idx >= len(frames) or frames[frame_idx] is None:
+            if not frames:
+                return None
+            frame_idx = min(frame_idx, len(frames) - 1)
+            if frames[frame_idx] is None:
                 return None
             frame = frames[frame_idx]
             key = "eps_tensor" if "Strain" in source else "F_tensor"
@@ -465,7 +471,10 @@ class PlotsPage(QWidget):
             stress_page = self.main_window.pages.get("stress")
             st_res = stress_page.get_results() if stress_page else {}
             frames = st_res.get("frames", [])
-            if frame_idx >= len(frames) or frames[frame_idx] is None:
+            if not frames:
+                return None
+            frame_idx = min(frame_idx, len(frames) - 1)
+            if frames[frame_idx] is None:
                 return None
             frame = frames[frame_idx]
             if "Von Mises" in source:
@@ -1025,6 +1034,23 @@ class PlotsPage(QWidget):
         pass
 
     def load_from_experiment(self, exp):
-        """Clear cache and refresh — data comes from other pages' results."""
+        """Clear cache, reset controls, and refresh."""
         self._cached_data = {}
+        # Reset frame/z controls so stale values don't cause out-of-range lookups
+        self.sb_frame.blockSignals(True)
+        self.sb_frame.setValue(0)
+        self.sb_frame.setMaximum(0)
+        self.sb_frame.blockSignals(False)
+        self.sb_frame_top.blockSignals(True)
+        self.sb_frame_top.setValue(0)
+        self.sb_frame_top.setMaximum(0)
+        self.sb_frame_top.blockSignals(False)
+        self.sl_z.blockSignals(True)
+        self.sl_z.setValue(0)
+        self.sl_z.setMaximum(0)
+        self.sl_z.blockSignals(False)
+        self.sl_z_top.blockSignals(True)
+        self.sl_z_top.setValue(0)
+        self.sl_z_top.setMaximum(0)
+        self.sl_z_top.blockSignals(False)
         self._refresh_plot()
