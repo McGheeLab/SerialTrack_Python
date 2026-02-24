@@ -680,6 +680,7 @@ class StressPage(QWidget):
             exp = self.main_window.exp_manager.active
             if exp:
                 exp.stress_runs.append(record)
+                exp.store_stress_results(results)
                 self.main_window.exp_manager.update(exp.exp_id)
 
         self._update_preview()
@@ -732,7 +733,10 @@ class StressPage(QWidget):
         ax = self.result_canvas.add_subplot(1, 1, 1)
         im = ax.imshow(data.T, cmap=cmap, origin="lower")
         ax.set_title(title, color=Settings.FG_PRIMARY, fontsize=10)
-        self.result_canvas.figure.colorbar(im, ax=ax, shrink=0.8)
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="4%", pad=0.05)
+        self.result_canvas.figure.colorbar(im, cax=cax)
         self.result_canvas.draw()
 
     # ───── Experiment lifecycle ────────────────────────────────────
@@ -741,14 +745,34 @@ class StressPage(QWidget):
         return self._results
 
     def on_experiment_changed(self, exp_id: str):
-        self.history_list.clear()
-        if self.main_window:
-            exp = self.main_window.exp_manager.get(exp_id)
-            if exp:
-                for r in exp.stress_runs:
-                    item = QListWidgetItem(f"[{r.timestamp}] {r.description}")
-                    item.setData(Qt.UserRole, r.record_id)
-                    self.history_list.addItem(item)
+        pass  # Now handled by save/load_from_experiment
 
     def on_activated(self):
         pass
+
+    def save_to_experiment(self, exp):
+        """Persist stress results into experiment cache."""
+        exp.store_stress_results(self._results)
+
+    def load_from_experiment(self, exp):
+        """Restore stress results from experiment cache."""
+        self._results = exp.get_stress_results() or {}
+
+        # Refresh history
+        self.history_list.clear()
+        for r in exp.stress_runs:
+            item = QListWidgetItem(f"[{r.timestamp}] {r.description}")
+            item.setData(Qt.UserRole, r.record_id)
+            self.history_list.addItem(item)
+
+        # Refresh preview
+        frames = self._results.get("frames", [])
+        if frames:
+            self.sb_frame.setMaximum(max(0, len(frames) - 1))
+            self._update_preview()
+            self.status.set_status("ready", f"{len(frames)} frames loaded")
+        else:
+            self.sb_frame.setMaximum(0)
+            self.result_canvas.clear()
+            self.result_canvas.draw()
+            self.status.set_status("idle", "No stress data")

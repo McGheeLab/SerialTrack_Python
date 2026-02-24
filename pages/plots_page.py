@@ -4,12 +4,11 @@ Plots & Visualization Page — Publication-quality rendering of tracking results
 Supports:
   - Multiple data sources: displacement, velocity, strain, stress, von Mises
   - Plot types: heatmap, contour, quiver/vector, combined overlay
-  - Triangle-style quiver markers with proper scaling
   - Colormap library with preview
-  - Z-slice and time/frame controls above the plot
-  - Font size/family controls for axes
+  - 2D slice control for 3D datasets
   - Multi-component side-by-side or single-component focus
   - Export to PNG, SVG, PDF, TIFF at custom DPI
+  - Customizable titles, labels, colorbar range
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, Tuple
@@ -98,6 +97,26 @@ class PlotsPage(QWidget):
         self.cb_component.currentIndexChanged.connect(self._refresh_plot)
         src_lay.addWidget(self.cb_component)
 
+        # Frame selector
+        frame_row = QHBoxLayout()
+        frame_row.addWidget(QLabel("Frame:"))
+        self.sb_frame = QSpinBox()
+        self.sb_frame.setMinimum(0)
+        self.sb_frame.valueChanged.connect(self._refresh_plot)
+        frame_row.addWidget(self.sb_frame)
+        src_lay.addLayout(frame_row)
+
+        # Z-slice for 3D
+        z_row = QHBoxLayout()
+        z_row.addWidget(QLabel("Z slice:"))
+        self.sl_z = QSlider(Qt.Horizontal)
+        self.sl_z.setMinimum(0)
+        self.sl_z.valueChanged.connect(self._refresh_plot)
+        z_row.addWidget(self.sl_z)
+        self.lbl_z = QLabel("0")
+        z_row.addWidget(self.lbl_z)
+        src_lay.addLayout(z_row)
+
         left_lay.addWidget(src_grp)
 
         # --- Plot Type ---
@@ -119,20 +138,19 @@ class PlotsPage(QWidget):
         self.sb_quiver_skip.setMinimum(1)
         self.sb_quiver_skip.setMaximum(20)
         self.sb_quiver_skip.setValue(3)
-        self.sb_quiver_skip.setToolTip("Show every Nth vector. Higher = sparser.")
+        self.sb_quiver_skip.setToolTip("Show every Nth arrow. Higher = sparser.")
         self.sb_quiver_skip.valueChanged.connect(self._refresh_plot)
         q_row.addWidget(self.sb_quiver_skip)
         plot_lay.addLayout(q_row)
 
         scale_row = QHBoxLayout()
-        scale_row.addWidget(QLabel("Vector scale:"))
+        scale_row.addWidget(QLabel("Arrow scale:"))
         self.dsb_quiver_scale = QDoubleSpinBox()
-        self.dsb_quiver_scale.setRange(0.01, 1000.0)
+        self.dsb_quiver_scale.setRange(0.01, 50.0)
         self.dsb_quiver_scale.setValue(1.0)
         self.dsb_quiver_scale.setSingleStep(0.1)
         self.dsb_quiver_scale.setDecimals(2)
-        self.dsb_quiver_scale.setToolTip(
-            "Vector length scaling. Larger values = shorter vectors on screen.")
+        self.dsb_quiver_scale.setToolTip("Triangle size. Smaller = smaller triangles.")
         self.dsb_quiver_scale.valueChanged.connect(self._refresh_plot)
         scale_row.addWidget(self.dsb_quiver_scale)
         plot_lay.addLayout(scale_row)
@@ -191,8 +209,8 @@ class PlotsPage(QWidget):
 
         left_lay.addWidget(cmap_grp)
 
-        # --- Labels & Font ---
-        label_grp = QGroupBox("Labels & Font")
+        # --- Labels ---
+        label_grp = QGroupBox("Labels & Title")
         label_lay = QVBoxLayout(label_grp)
 
         self.le_title = QLineEdit()
@@ -294,36 +312,16 @@ class PlotsPage(QWidget):
         right = QWidget()
         right_lay = QVBoxLayout(right)
 
-        # ── Z/Time/Frame controls ABOVE the plot ──
-        ctrl_row = QHBoxLayout()
-
+        # Refresh button
+        top_row = QHBoxLayout()
         btn_refresh = QPushButton("🔄  Refresh")
         btn_refresh.clicked.connect(self._refresh_plot)
-        ctrl_row.addWidget(btn_refresh)
+        top_row.addWidget(btn_refresh)
 
         self.status = StatusIndicator()
-        ctrl_row.addWidget(self.status)
-
-        ctrl_row.addSpacing(20)
-
-        ctrl_row.addWidget(QLabel("Frame:"))
-        self.sb_frame = QSpinBox()
-        self.sb_frame.setMinimum(0)
-        self.sb_frame.valueChanged.connect(self._refresh_plot)
-        ctrl_row.addWidget(self.sb_frame)
-
-        ctrl_row.addWidget(QLabel("Z slice:"))
-        self.sl_z = QSlider(Qt.Horizontal)
-        self.sl_z.setMinimum(0)
-        self.sl_z.setMaximumWidth(200)
-        self.sl_z.valueChanged.connect(self._on_z_changed)
-        ctrl_row.addWidget(self.sl_z)
-        self.lbl_z = QLabel("0")
-        self.lbl_z.setMinimumWidth(30)
-        ctrl_row.addWidget(self.lbl_z)
-
-        ctrl_row.addStretch()
-        right_lay.addLayout(ctrl_row)
+        top_row.addWidget(self.status)
+        top_row.addStretch()
+        right_lay.addLayout(top_row)
 
         # Main canvas
         self.canvas = MplCanvas(figsize=(9, 7), toolbar=True)
@@ -380,10 +378,6 @@ class PlotsPage(QWidget):
         self.cb_cmap.addItems(COLORMAPS.get(cat, ["viridis"]))
         self.cb_cmap.blockSignals(False)
 
-    def _on_z_changed(self, val):
-        self.lbl_z.setText(str(val))
-        self._refresh_plot()
-
     # ───── Data retrieval ─────────────────────────────────────────
 
     def _get_data(self) -> Optional[Dict[str, Any]]:
@@ -405,6 +399,7 @@ class PlotsPage(QWidget):
             grids = [np.array(g) for g in frame["grids"]]
 
             if source == "Velocity":
+                # Use tstep if available
                 pp_config = pp_res.get("config", {})
                 tstep = pp_config.get("tstep", 1.0)
                 psteps = np.array([
@@ -469,6 +464,7 @@ class PlotsPage(QWidget):
             return data
 
         elif dtype == "vector":
+            # data shape: (D, *grid_shape)
             if "Magnitude" in component:
                 return np.sqrt(np.sum(data**2, axis=0))
             comp_map = {"x": 0, "y": 1, "z": 2}
@@ -478,6 +474,7 @@ class PlotsPage(QWidget):
             return data[0]  # fallback
 
         elif dtype == "tensor":
+            # data shape: (D, D, *grid_shape)
             tensor_map = {
                 "xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
                 "xy": (0, 1), "xz": (0, 2), "yz": (1, 2),
@@ -487,6 +484,7 @@ class PlotsPage(QWidget):
                     return data[i, j]
 
             if "Effective" in component:
+                # Effective strain = sqrt(2/3 * eps:eps)
                 inner = np.sum(data * data, axis=(0, 1))
                 return np.sqrt(2.0 / 3.0 * inner)
 
@@ -494,14 +492,15 @@ class PlotsPage(QWidget):
                 s = data
                 if ndim == 3:
                     return np.sqrt(0.5 * (
-                        (s[0, 0]-s[1, 1])**2 + (s[1, 1]-s[2, 2])**2
-                        + (s[2, 2]-s[0, 0])**2
-                        + 6*(s[0, 1]**2 + s[1, 2]**2 + s[0, 2]**2)))
+                        (s[0,0]-s[1,1])**2 + (s[1,1]-s[2,2])**2
+                        + (s[2,2]-s[0,0])**2
+                        + 6*(s[0,1]**2 + s[1,2]**2 + s[0,2]**2)))
                 else:
-                    return np.sqrt(s[0, 0]**2 - s[0, 0]*s[1, 1]
-                                   + s[1, 1]**2 + 3*s[0, 1]**2)
+                    return np.sqrt(s[0,0]**2 - s[0,0]*s[1,1]
+                                   + s[1,1]**2 + 3*s[0,1]**2)
 
             if "det(F)" in component or "Jacobian" in component:
+                # det(F) at each grid point (F includes displacement gradient)
                 grid_shape = data.shape[2:]
                 F_full = data.copy()
                 for k in range(ndim):
@@ -582,19 +581,33 @@ class PlotsPage(QWidget):
             return float(np.percentile(finite, 2)), float(np.percentile(finite, 98))
         return self.dsb_vmin.value(), self.dsb_vmax.value()
 
-    def _get_font_props(self) -> dict:
-        """Return dict with font properties from controls."""
-        return {
-            "fontfamily": self.cb_font_family.currentText(),
-            "fontsize": self.sb_font_size.value(),
-        }
-
     def _auto_title(self, source: str, component: str) -> str:
         custom = self.le_title.text().strip()
         if custom:
             return custom
         frame = self.sb_frame.value()
         return f"{source} — {component} — Frame {frame}"
+
+    def _get_font_props(self) -> dict:
+        """Return font properties from controls."""
+        return {
+            "fontfamily": self.cb_font_family.currentText(),
+            "fontsize": self.sb_font_size.value(),
+        }
+
+    def _add_colorbar(self, ax, mappable, label=""):
+        """Add a properly-sized colorbar using axes_grid1 divider."""
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        fp = self._get_font_props()
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="3%", pad=0.08)
+        cbar = self.canvas.figure.colorbar(mappable, cax=cax)
+        if label:
+            cbar.set_label(label, fontsize=fp["fontsize"] - 1,
+                           color=Settings.FG_SECONDARY,
+                           fontfamily=fp["fontfamily"])
+        cbar.ax.tick_params(labelsize=fp["fontsize"] - 2, colors="#b0b0b0")
+        return cbar
 
     def _render_single(self, data_2d: np.ndarray, info: Dict,
                        source: str, component: str, plot_type: str):
@@ -606,30 +619,20 @@ class PlotsPage(QWidget):
         vmin, vmax = self._get_clim(data_2d)
         title = self._auto_title(source, component)
         fp = self._get_font_props()
+        cbar_label = self.le_cbar_label.text().strip() or component
 
         if "Quiver" in plot_type and "Overlay" not in plot_type:
-            # Pure quiver: need vector data
             self._render_quiver(ax, info, data_2d)
         elif "Overlay" in plot_type:
             im = ax.imshow(data_2d.T, cmap=cmap, origin="lower",
                            vmin=vmin, vmax=vmax, aspect="equal")
-            cbar_label = self.le_cbar_label.text().strip() or component
-            cbar = self.canvas.figure.colorbar(
-                im, ax=ax, shrink=0.6, fraction=0.046, pad=0.04)
-            cbar.set_label(cbar_label, fontsize=fp["fontsize"] - 1,
-                           color=Settings.FG_SECONDARY)
-            cbar.ax.tick_params(labelsize=fp["fontsize"] - 2, colors="#b0b0b0")
+            self._add_colorbar(ax, im, cbar_label)
             self._render_quiver(ax, info, data_2d)
         elif "Filled Contour" in plot_type:
             levels = self.sb_contour_levels.value()
             cf = ax.contourf(data_2d.T, levels=levels, cmap=cmap,
                              vmin=vmin, vmax=vmax, origin="lower")
-            cbar_label = self.le_cbar_label.text().strip() or component
-            cbar = self.canvas.figure.colorbar(
-                cf, ax=ax, shrink=0.6, fraction=0.046, pad=0.04)
-            cbar.set_label(cbar_label, fontsize=fp["fontsize"] - 1,
-                           color=Settings.FG_SECONDARY)
-            cbar.ax.tick_params(labelsize=fp["fontsize"] - 2, colors="#b0b0b0")
+            self._add_colorbar(ax, cf, cbar_label)
         elif "Line Contour" in plot_type:
             levels = self.sb_contour_levels.value()
             cs = ax.contour(data_2d.T, levels=levels, cmap=cmap,
@@ -639,12 +642,7 @@ class PlotsPage(QWidget):
             # Heatmap
             im = ax.imshow(data_2d.T, cmap=cmap, origin="lower",
                            vmin=vmin, vmax=vmax, aspect="equal")
-            cbar_label = self.le_cbar_label.text().strip() or component
-            cbar = self.canvas.figure.colorbar(
-                im, ax=ax, shrink=0.6, fraction=0.046, pad=0.04)
-            cbar.set_label(cbar_label, fontsize=fp["fontsize"] - 1,
-                           color=Settings.FG_SECONDARY)
-            cbar.ax.tick_params(labelsize=fp["fontsize"] - 2, colors="#b0b0b0")
+            self._add_colorbar(ax, im, cbar_label)
 
         ax.set_title(title, color=Settings.FG_PRIMARY,
                      fontsize=fp["fontsize"] + 1, fontfamily=fp["fontfamily"])
@@ -661,9 +659,13 @@ class PlotsPage(QWidget):
         self.canvas.draw()
 
     def _render_quiver(self, ax, info: Dict, bg_data: np.ndarray):
-        """Overlay triangle-style quiver markers on the given axes."""
+        """Overlay triangle markers pointing in displacement direction.
+
+        Uses matplotlib PolyCollection for batch rendering (fast).
+        Triangles are sized relative to skip spacing so they fit the grid.
+        Scale control: larger value = larger triangles (intuitive).
+        """
         if info["type"] != "vector":
-            # Try to get vector data from displacement
             if not self.main_window:
                 return
             pp_page = self.main_window.pages.get("postprocess")
@@ -680,74 +682,79 @@ class PlotsPage(QWidget):
         skip = self.sb_quiver_skip.value()
         scale = self.dsb_quiver_scale.value()
 
-        if ndim >= 2:
-            ux = vec[0]
-            uy = vec[1]
-            # Slice 3D to 2D
-            if ux.ndim == 3:
-                z = min(self.sl_z.value(), ux.shape[2] - 1)
-                ux = ux[:, :, z]
-                uy = uy[:, :, z]
+        if ndim < 2:
+            return
 
-            ny, nx = ux.shape
-            Y, X = np.mgrid[0:ny, 0:nx]
+        ux = vec[0]
+        uy = vec[1]
+        if ux.ndim == 3:
+            z = min(self.sl_z.value(), ux.shape[2] - 1)
+            ux = ux[:, :, z]
+            uy = uy[:, :, z]
 
-            # Subsample
-            X_s = X[::skip, ::skip]
-            Y_s = Y[::skip, ::skip]
-            U_s = ux[::skip, ::skip]
-            V_s = uy[::skip, ::skip]
+        ny, nx = ux.shape
+        Y, X = np.mgrid[0:ny, 0:nx]
 
-            # Compute magnitude for color mapping
-            mag = np.sqrt(U_s ** 2 + V_s ** 2)
-            mag_safe = np.where(mag > 0, mag, 1.0)
+        # Subsample
+        X_s = X[::skip, ::skip].ravel()
+        Y_s = Y[::skip, ::skip].ravel()
+        U_s = ux[::skip, ::skip].ravel()
+        V_s = uy[::skip, ::skip].ravel()
 
-            # Normalize vectors then scale to fixed visual length
-            # The scale parameter controls visual size: larger = shorter
-            max_dim = max(nx, ny)
-            visual_scale = max_dim * 0.03 / max(scale, 0.01)
+        mag = np.sqrt(U_s**2 + V_s**2)
+        mask = mag > 1e-12
+        if not np.any(mask):
+            return
 
-            U_norm = U_s / mag_safe * visual_scale
-            V_norm = V_s / mag_safe * visual_scale
+        X_s, Y_s, U_s, V_s, mag = X_s[mask], Y_s[mask], U_s[mask], V_s[mask], mag[mask]
 
-            # Use triangle markers instead of arrows
-            # headwidth=0 removes arrowhead from shaft, we use custom triangles
-            import matplotlib.colors as mcolors
+        # Triangle size: fraction of skip spacing, scaled by user control
+        # Default scale=1.0 gives triangles about 30% of skip spacing (small & clean)
+        base_size = skip * 0.3 * scale
+        # Clamp to reasonable range
+        base_size = max(base_size, 0.5)
+        base_size = min(base_size, skip * 2.0)
 
-            # Color by magnitude
-            cmap_obj = ax.figure.axes[0].images[0].cmap if ax.images else None
-            if cmap_obj is None:
-                import matplotlib.cm as cm
-                cmap_obj = cm.get_cmap(self._get_cmap())
+        # Compute triangle vertices for each point
+        # Triangle points in displacement direction
+        angles = np.arctan2(V_s, U_s)
 
-            if mag.max() > 0:
-                norm = mcolors.Normalize(vmin=mag.min(), vmax=mag.max())
-            else:
-                norm = mcolors.Normalize(vmin=0, vmax=1)
+        # Three vertices of equilateral triangle pointing along angle
+        # Tip in the direction of flow, base perpendicular
+        r = base_size * 0.5  # half-height
+        cos_a = np.cos(angles)
+        sin_a = np.sin(angles)
 
-            # Plot triangle markers at each quiver position pointing in the direction
-            for i in range(X_s.shape[0]):
-                for j in range(X_s.shape[1]):
-                    if mag[i, j] < 1e-12:
-                        continue
-                    cx, cy = X_s[i, j], Y_s[i, j]
-                    angle = np.arctan2(V_s[i, j], U_s[i, j])
-                    color = cmap_obj(norm(mag[i, j]))
+        # Tip (forward)
+        tx = X_s + r * cos_a
+        ty = Y_s + r * sin_a
+        # Base left
+        lx = X_s - r * 0.5 * cos_a + r * 0.4 * sin_a
+        ly = Y_s - r * 0.5 * sin_a - r * 0.4 * cos_a
+        # Base right
+        rx = X_s - r * 0.5 * cos_a - r * 0.4 * sin_a
+        ry = Y_s - r * 0.5 * sin_a + r * 0.4 * cos_a
 
-                    # Triangle size proportional to magnitude
-                    tri_size = min(visual_scale, mag[i, j] / mag_safe.max() * visual_scale)
-                    tri_size = max(tri_size, visual_scale * 0.3)
+        # Build vertices array: (N, 3, 2)
+        verts = np.stack([
+            np.column_stack([tx, ty]),
+            np.column_stack([lx, ly]),
+            np.column_stack([rx, ry]),
+        ], axis=1)
 
-                    import matplotlib.patches as patches
-                    from matplotlib.transforms import Affine2D
+        # Color by magnitude
+        import matplotlib.colors as mcolors
+        import matplotlib.cm as cm
+        from matplotlib.collections import PolyCollection
 
-                    # Create a triangle pointing right, then rotate
-                    triangle = patches.RegularPolygon(
-                        (cx, cy), numVertices=3, radius=tri_size,
-                        orientation=angle - np.pi / 2,
-                        facecolor=color, edgecolor='none', alpha=0.85,
-                    )
-                    ax.add_patch(triangle)
+        cmap_name = self._get_cmap()
+        cmap_obj = cm.get_cmap(cmap_name)
+        norm = mcolors.Normalize(vmin=mag.min(), vmax=mag.max())
+        colors = cmap_obj(norm(mag))
+
+        pc = PolyCollection(verts, facecolors=colors, edgecolors='none',
+                           alpha=0.85, zorder=5)
+        ax.add_collection(pc)
 
     def _plot_multi_component(self, info: Dict, source: str, plot_type: str):
         """Plot multiple components side by side."""
@@ -778,10 +785,8 @@ class PlotsPage(QWidget):
                            vmin=vmin, vmax=vmax, aspect="equal")
             ax.set_title(label, color=Settings.FG_PRIMARY,
                          fontsize=fp["fontsize"], fontfamily=fp["fontfamily"])
-            cbar = self.canvas.figure.colorbar(
-                im, ax=ax, shrink=0.6, fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=fp["fontsize"] - 2, colors="#b0b0b0")
             ax.tick_params(labelsize=fp["fontsize"] - 2)
+            self._add_colorbar(ax, im)
 
         self.canvas.figure.tight_layout()
         self.canvas.draw()
@@ -795,35 +800,31 @@ class PlotsPage(QWidget):
             return
 
         ax = self.canvas.add_subplot(1, 1, 1)
-        fp = self._get_font_props()
 
         try:
             coords_ref = session.coords_ref
             frame_results = session.frame_results
 
+            # Collect trajectories
             n_particles = len(coords_ref)
             n_frames = len(frame_results)
-            ndim = coords_ref.shape[1]
 
             # Build trajectory arrays (particle × frame × dim)
+            ndim = coords_ref.shape[1]
             trajectories = np.full((n_particles, n_frames + 1, ndim), np.nan)
             trajectories[:, 0, :] = coords_ref
 
             for t, res in enumerate(frame_results):
-                # track_b2a maps frame B particles → frame A (reference)
-                # We need to handle the sizes correctly
-                n_b = len(res.coords_b) if hasattr(res, 'coords_b') else 0
-                track = res.track_b2a
-
-                # Build reverse mapping: for each ref particle, find its
-                # position in frame B
-                for b_idx in range(min(len(track), n_b)):
-                    a_idx = track[b_idx]
+                # track_b2a maps frame B particles → reference particles
+                # Iterate B indices to avoid out-of-bounds on reference array
+                n_b = len(res.track_b2a) if hasattr(res, 'track_b2a') else 0
+                for b_idx in range(n_b):
+                    a_idx = res.track_b2a[b_idx]
                     if 0 <= a_idx < n_particles:
                         if hasattr(res, 'coords_b') and b_idx < len(res.coords_b):
-                            trajectories[a_idx, t + 1, :] = res.coords_b[b_idx]
+                            trajectories[a_idx, t+1, :] = res.coords_b[b_idx]
                         elif hasattr(res, 'disp_b2a') and a_idx < len(res.disp_b2a):
-                            trajectories[a_idx, t + 1, :] = (
+                            trajectories[a_idx, t+1, :] = (
                                 coords_ref[a_idx] - res.disp_b2a[a_idx])
 
             # Color setup
@@ -856,10 +857,9 @@ class PlotsPage(QWidget):
                 if "Displacement" in component:
                     disp = np.sqrt(np.sum(np.diff(traj[valid], axis=0)**2, axis=1))
                     total_disp = np.sum(disp)
-                    max_total = np.max(disp) * n_frames + 1e-9
-                    color = cmap_obj(total_disp / max_total)
+                    color = cmap_obj(total_disp / (np.max(disp) * n_frames + 1e-9))
                 elif "Time" in component:
-                    color = cmap_obj(p / max(max_plot, 1))
+                    color = cmap_obj(p / max_plot)
                 else:
                     color = (Settings.ACCENT_CYAN,)
 
@@ -867,6 +867,7 @@ class PlotsPage(QWidget):
                 ax.plot(x[0], y[0], 'o', color=Settings.ACCENT_GREEN,
                         markersize=2, alpha=0.5)
 
+            fp = self._get_font_props()
             ax.set_xlabel(f"{ax_label[0]} (px)", color=Settings.FG_SECONDARY,
                           fontsize=fp["fontsize"], fontfamily=fp["fontfamily"])
             ax.set_ylabel(f"{ax_label[1]} (px)", color=Settings.FG_SECONDARY,
@@ -966,7 +967,16 @@ class PlotsPage(QWidget):
     # ───── Experiment lifecycle ────────────────────────────────────
 
     def on_experiment_changed(self, exp_id: str):
-        self._cached_data = {}
+        pass  # Now handled by save/load_from_experiment
 
     def on_activated(self):
+        self._refresh_plot()
+
+    def save_to_experiment(self, exp):
+        """Plots page has no internal state to save — it reads from other pages."""
+        pass
+
+    def load_from_experiment(self, exp):
+        """Clear cache and refresh — data comes from other pages' results."""
+        self._cached_data = {}
         self._refresh_plot()

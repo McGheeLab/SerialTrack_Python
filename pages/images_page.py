@@ -1,8 +1,7 @@
 """
 Images Page — Load images, preview slices, apply enhancement pipeline.
 
-Supports: ND2, TIFF stacks (single-file multi-frame), TIFF series,
-MAT files, NPY, DICOM (.dcm), MRC/MRC2, HDF5.
+Supports: ND2, TIFF stacks, MAT files, NPY.
 Enhancement plugins are loaded from the plugin registry.
 """
 from __future__ import annotations
@@ -23,39 +22,12 @@ from widgets.common import ImageViewer, ParamEditor, MplCanvas
 from core.plugin_registry import PluginBase, EnhancementPlugin
 from core.settings import Settings
 
-
-# Supported extensions for file dialog and folder scanning
-SUPPORTED_EXTS = {
-    ".tif", ".tiff",  # TIFF single or stack
-    ".nd2",           # Nikon ND2
-    ".mat",           # MATLAB
-    ".npy", ".npz",   # NumPy
-    ".dcm",           # DICOM
-    ".mrc", ".mrc2",  # MRC electron microscopy
-    ".h5", ".hdf5",   # HDF5
-    ".raw",           # Raw binary (needs metadata)
-}
-
-FILTER_STRING = (
-    "All Supported (*.tif *.tiff *.nd2 *.mat *.npy *.npz *.dcm *.mrc *.h5 *.hdf5);;"
-    "TIFF (*.tif *.tiff);;"
-    "ND2 (*.nd2);;"
-    "MATLAB (*.mat);;"
-    "NumPy (*.npy *.npz);;"
-    "DICOM (*.dcm);;"
-    "MRC (*.mrc *.mrc2);;"
-    "HDF5 (*.h5 *.hdf5);;"
-    "All Files (*)"
-)
-
-
 class LoadWorker(QThread):
     """Background thread for loading images."""
     finished = Signal(list)
     error = Signal(str)
     progress = Signal(int, int)
-    log = Signal(str)
-
+    
     def __init__(self, paths, load_mode, parent=None):
         super().__init__(parent)
         self.paths = paths
@@ -63,17 +35,20 @@ class LoadWorker(QThread):
 
     def run(self):
         try:
+
             volumes = []
             total = len(self.paths)
             for i, p in enumerate(self.paths):
                 p = Path(p)
-                ext = p.suffix.lower()
-                self.log.emit(f"Loading {p.name} ({i+1}/{total})...")
-
-                if ext in (".tif", ".tiff"):
-                    volumes.extend(self._load_tiff(p))
-
-                elif ext == ".mat":
+                if p.suffix.lower() in (".tif", ".tiff"):
+                    import tifffile
+                    img = tifffile.imread(str(p)).astype(np.float64)
+                    if img.ndim == 2:
+                        img = img.T  # (x, y)
+                    elif img.ndim == 3:
+                        img = img.transpose(1, 0, 2)  # (x, y, z)
+                    volumes.append(img)
+                elif p.suffix.lower() == ".mat":
                     import scipy.io as sio
                     data = sio.loadmat(str(p), simplify_cells=True)
                     keys = [k for k in data if not k.startswith("_")]
@@ -81,204 +56,31 @@ class LoadWorker(QThread):
                     if vol.ndim == 3:
                         vol = vol.transpose(1, 0, 2)
                     volumes.append(vol.astype(np.float64))
-
-                elif ext == ".npy":
+                elif p.suffix.lower() == ".npy":
                     volumes.append(np.load(str(p)).astype(np.float64))
-
-                elif ext == ".npz":
-                    npz = np.load(str(p))
-                    keys = list(npz.keys())
-                    if keys:
-                        vol = npz[keys[0]].astype(np.float64)
-                        volumes.append(vol)
-
-                elif ext == ".nd2":
-                    volumes.extend(self._load_nd2(p))
-
-                elif ext == ".dcm":
-                    volumes.extend(self._load_dicom(p))
-
-                elif ext in (".mrc", ".mrc2"):
-                    volumes.extend(self._load_mrc(p))
-
-                elif ext in (".h5", ".hdf5"):
-                    volumes.extend(self._load_hdf5(p))
-
+                elif p.suffix.lower() == ".nd2":
+                    try:
+                        import nd2
+                        with nd2.ND2File(str(p)) as f:
+                            data = f.asarray().astype(np.float64)
+                            if data.ndim == 4:  # (T, Z, Y, X)
+                                for t in range(data.shape[0]):
+                                    volumes.append(data[t].transpose(2, 1, 0))
+                            elif data.ndim == 3:  # (Z, Y, X) or (T, Y, X)
+                                volumes.append(data.transpose(2, 1, 0))
+                            else:
+                                volumes.append(data.T)
+                    except ImportError:
+                        self.error.emit("nd2 package not installed. Install with: pip install nd2")
+                        return
                 else:
-                    self.log.emit(f"  Skipping unsupported format: {ext}")
-
+                    self.error.emit(f"Unsupported format: {p.suffix}")
+                    return
                 self.progress.emit(i + 1, total)
 
-            if not volumes:
-                self.error.emit("No volumes could be loaded from the selected files.")
-                return
-
-            self.log.emit(f"Loaded {len(volumes)} volumes successfully.")
             self.finished.emit(volumes)
-
         except Exception as e:
-            import traceback
-            self.error.emit(f"{e}\n{traceback.format_exc()}")
-
-    def _load_tiff(self, p: Path) -> List[np.ndarray]:
-        """Load TIFF: handles single images, stacks, and multi-series."""
-        import tifffile
-        vols = []
-        img = tifffile.imread(str(p)).astype(np.float64)
-
-        if img.ndim == 2:
-            # Single 2D image
-            vols.append(img.T)  # (x, y)
-
-        elif img.ndim == 3:
-            # Could be (T, Y, X) time series or (Z, Y, X) volume
-            # Heuristic: if first dim is small (<10) treat as time series of 2D
-            # Otherwise treat as single 3D volume
-            if img.shape[0] <= 10 and img.shape[0] < img.shape[1]:
-                # Time series of 2D images
-                for t in range(img.shape[0]):
-                    vols.append(img[t].T)
-                self.log.emit(f"  Interpreted as {img.shape[0]}-frame 2D series")
-            else:
-                # Single 3D volume: (Z, Y, X) → (X, Y, Z)
-                vols.append(img.transpose(2, 1, 0))
-                self.log.emit(f"  Interpreted as 3D volume {img.shape}")
-
-        elif img.ndim == 4:
-            # (T, Z, Y, X) time series of volumes
-            for t in range(img.shape[0]):
-                vols.append(img[t].transpose(2, 1, 0))
-            self.log.emit(f"  Loaded {img.shape[0]}-frame 3D series")
-
-        elif img.ndim == 5:
-            # (T, C, Z, Y, X) — take first channel
-            self.log.emit(f"  5D data detected, using first channel")
-            for t in range(img.shape[0]):
-                vols.append(img[t, 0].transpose(2, 1, 0))
-
-        return vols
-
-    def _load_nd2(self, p: Path) -> List[np.ndarray]:
-        """Load Nikon ND2 files."""
-        vols = []
-        try:
-            import nd2
-            with nd2.ND2File(str(p)) as f:
-                data = f.asarray().astype(np.float64)
-                self.log.emit(f"  ND2 raw shape: {data.shape}, ndim={data.ndim}")
-
-                if data.ndim == 2:
-                    vols.append(data.T)
-                elif data.ndim == 3:
-                    # (Z, Y, X) single volume
-                    vols.append(data.transpose(2, 1, 0))
-                elif data.ndim == 4:
-                    # (T, Z, Y, X) or (C, Z, Y, X)
-                    # If first dim is small and matches channel count, assume channels
-                    if data.shape[0] <= 4:
-                        # Assume (C, Z, Y, X) — use first channel
-                        vols.append(data[0].transpose(2, 1, 0))
-                        self.log.emit(f"  Interpreted as {data.shape[0]} channels, using ch0")
-                    else:
-                        for t in range(data.shape[0]):
-                            vols.append(data[t].transpose(2, 1, 0))
-                        self.log.emit(f"  Loaded {data.shape[0]} time points")
-                elif data.ndim == 5:
-                    # (T, C, Z, Y, X)
-                    self.log.emit(f"  5D ND2: {data.shape}, using ch0")
-                    for t in range(data.shape[0]):
-                        vols.append(data[t, 0].transpose(2, 1, 0))
-                else:
-                    vols.append(data)
-
-        except ImportError:
-            self.error.emit(
-                "nd2 package not installed. Install with: pip install nd2")
-        except Exception as e:
-            self.log.emit(f"  ND2 load error: {e}")
-            # Fallback: try tifffile
-            self.log.emit("  Attempting tifffile fallback...")
-            try:
-                import tifffile
-                img = tifffile.imread(str(p)).astype(np.float64)
-                if img.ndim == 3:
-                    vols.append(img.transpose(2, 1, 0))
-                elif img.ndim == 2:
-                    vols.append(img.T)
-            except Exception:
-                pass
-
-        return vols
-
-    def _load_dicom(self, p: Path) -> List[np.ndarray]:
-        """Load DICOM files."""
-        vols = []
-        try:
-            import pydicom
-            ds = pydicom.dcmread(str(p))
-            arr = ds.pixel_array.astype(np.float64)
-            if arr.ndim == 2:
-                vols.append(arr.T)
-            elif arr.ndim == 3:
-                vols.append(arr.transpose(2, 1, 0))
-            self.log.emit(f"  DICOM loaded: {arr.shape}")
-        except ImportError:
-            self.log.emit("  pydicom not installed — skipping DICOM")
-        except Exception as e:
-            self.log.emit(f"  DICOM error: {e}")
-        return vols
-
-    def _load_mrc(self, p: Path) -> List[np.ndarray]:
-        """Load MRC/MRC2 electron microscopy files."""
-        vols = []
-        try:
-            import mrcfile
-            with mrcfile.open(str(p), mode='r') as mrc:
-                arr = mrc.data.astype(np.float64)
-                if arr.ndim == 2:
-                    vols.append(arr.T)
-                elif arr.ndim == 3:
-                    vols.append(arr.transpose(2, 1, 0))
-                self.log.emit(f"  MRC loaded: {arr.shape}")
-        except ImportError:
-            self.log.emit("  mrcfile not installed — skipping MRC")
-        except Exception as e:
-            self.log.emit(f"  MRC error: {e}")
-        return vols
-
-    def _load_hdf5(self, p: Path) -> List[np.ndarray]:
-        """Load HDF5 files (first dataset found)."""
-        vols = []
-        try:
-            import h5py
-            with h5py.File(str(p), 'r') as f:
-                # Find first dataset
-                def find_datasets(group, path=""):
-                    datasets = []
-                    for key in group:
-                        item = group[key]
-                        if isinstance(item, h5py.Dataset):
-                            datasets.append(f"{path}/{key}")
-                        elif isinstance(item, h5py.Group):
-                            datasets.extend(find_datasets(item, f"{path}/{key}"))
-                    return datasets
-
-                ds_paths = find_datasets(f)
-                if ds_paths:
-                    arr = np.array(f[ds_paths[0]]).astype(np.float64)
-                    if arr.ndim == 2:
-                        vols.append(arr.T)
-                    elif arr.ndim == 3:
-                        vols.append(arr.transpose(2, 1, 0))
-                    elif arr.ndim == 4:
-                        for t in range(arr.shape[0]):
-                            vols.append(arr[t].transpose(2, 1, 0))
-                    self.log.emit(f"  HDF5 dataset '{ds_paths[0]}': shape {arr.shape}")
-        except ImportError:
-            self.log.emit("  h5py not installed — skipping HDF5")
-        except Exception as e:
-            self.log.emit(f"  HDF5 error: {e}")
-        return vols
+            self.error.emit(str(e))
 
 
 class EnhanceWorker(QThread):
@@ -351,14 +153,6 @@ class ImagesPage(QWidget):
         self.btn_load_folder = QPushButton("Load Folder...")
         self.btn_load_folder.clicked.connect(self._load_folder)
         load_lay.addWidget(self.btn_load_folder)
-
-        # Supported formats info
-        formats_lbl = QLabel(
-            "Supported: .nd2 · .tif/.tiff · .mat · .npy · .dcm · .mrc · .h5")
-        formats_lbl.setStyleSheet(
-            f"color: {Settings.FG_SECONDARY}; font: 8pt;")
-        formats_lbl.setWordWrap(True)
-        load_lay.addWidget(formats_lbl)
 
         self.load_info = QLabel("No images loaded")
         self.load_info.setStyleSheet(f"color: {Settings.FG_SECONDARY};")
@@ -445,7 +239,9 @@ class ImagesPage(QWidget):
 
     def _load_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Load Image Files", "", FILTER_STRING)
+            self, "Load Image Files", "",
+            "Image Files (*.tif *.tiff *.mat *.npy *.nd2);;All Files (*)"
+        )
         if paths:
             self._start_load(paths)
 
@@ -453,15 +249,14 @@ class ImagesPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Load Image Folder")
         if folder:
             p = Path(folder)
-            files = sorted([
-                f for f in p.iterdir()
-                if f.suffix.lower() in SUPPORTED_EXTS
-            ])
+            files = sorted(
+                list(p.glob("*.tif")) + list(p.glob("*.tiff")) +
+                list(p.glob("*.mat")) + list(p.glob("*.npy"))
+            )
             if files:
                 self._start_load([str(f) for f in files])
             else:
-                QMessageBox.warning(self, "No Files",
-                                    "No supported files found in the selected folder.")
+                QMessageBox.warning(self, "No Files", "No supported files found.")
 
     def _start_load(self, paths):
         self.load_info.setText(f"Loading {len(paths)} files...")
@@ -473,9 +268,6 @@ class ImagesPage(QWidget):
         self._worker.error.connect(self._on_load_error)
         self._worker.progress.connect(
             lambda i, t: self.load_info.setText(f"Loading {i}/{t}...")
-        )
-        self._worker.log.connect(
-            lambda msg: self.enhance_status.setText(msg)
         )
         self._worker.start()
 
@@ -489,8 +281,6 @@ class ImagesPage(QWidget):
         if volumes:
             s = volumes[0].shape
             info_parts.append(f"shape={s}")
-            dtype_str = str(volumes[0].dtype)
-            info_parts.append(f"dtype={dtype_str}")
         self.load_info.setText(" | ".join(info_parts))
 
         self.viewer.set_data(volumes)
@@ -598,7 +388,41 @@ class ImagesPage(QWidget):
         return self._enhanced_volumes if self._enhanced_volumes else self._raw_volumes
 
     def on_experiment_changed(self, exp_id: str):
-        pass  # Could reload images for new experiment
+        pass  # Now handled by save/load_from_experiment
 
     def on_activated(self):
         pass
+
+    def save_to_experiment(self, exp):
+        """Persist loaded volumes and paths into experiment cache."""
+        vols = self.get_volumes()
+        if vols:
+            exp.store_image_volumes(vols)
+        # Save image paths
+        paths = []
+        for i in range(self.file_list.count()):
+            paths.append(self.file_list.item(i).text())
+        exp.image_paths = paths
+
+    def load_from_experiment(self, exp):
+        """Restore volumes and file list from experiment cache."""
+        vols = exp.get_image_volumes()
+        if vols is not None and len(vols) > 0:
+            self._raw_volumes = vols
+            self._enhanced_volumes = vols.copy() if hasattr(vols, 'copy') else list(vols)
+            # Update file list
+            self.file_list.clear()
+            for p in exp.image_paths:
+                self.file_list.addItem(p)
+            # Update preview
+            if hasattr(self, 'preview_canvas') and vols:
+                self._show_preview(0)
+            self.status_label.set_status("ready", f"{len(vols)} volumes")
+        else:
+            self._raw_volumes = []
+            self._enhanced_volumes = []
+            self.file_list.clear()
+            if hasattr(self, 'preview_canvas'):
+                self.preview_canvas.clear()
+                self.preview_canvas.draw()
+            self.status_label.set_status("idle", "No images")

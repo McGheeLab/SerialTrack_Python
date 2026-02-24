@@ -341,9 +341,12 @@ class AnalysisPage(QWidget):
             exp = self.main_window.exp_manager.active
             if exp:
                 exp.mean_tracking_ratio = mean_ratio
+                exp.store_tracking_session(session)
+                exp.store_frame_data(self._frame_data)
                 self.main_window.exp_manager.update(
                     exp.exp_id, status="complete",
-                    mean_tracking_ratio=mean_ratio
+                    mean_tracking_ratio=mean_ratio,
+                    n_frames=n_frames
                 )
             self.main_window.set_status("Analysis complete", "ready")
 
@@ -435,8 +438,43 @@ class AnalysisPage(QWidget):
     def get_session(self):
         return self._session
 
+    # ── Experiment switching ──────────────────────────────────
+
+    def save_to_experiment(self, exp):
+        """Persist current state into experiment record cache."""
+        exp.store_tracking_session(self._session)
+        exp.store_frame_data(self._frame_data)
+        if self._session and hasattr(self._session, 'frame_results'):
+            exp.n_frames = len(self._session.frame_results)
+
+    def load_from_experiment(self, exp):
+        """Restore state from experiment record cache and refresh UI."""
+        self._session = exp.get_tracking_session()
+        self._frame_data = exp.get_frame_data() or []
+
+        # Refresh live plots
+        if self._frame_data:
+            self._update_plots()
+            n = len(self._frame_data)
+            mean_ratio = np.mean([d.get("ratio", 0) for d in self._frame_data])
+            self.status_label.set_status("ready", "Complete")
+            self.eta_label.setText(f"{n} frames, ratio={mean_ratio:.3f}")
+        else:
+            # Clear plots for empty experiment
+            self.ratio_canvas.clear()
+            self.ratio_canvas.draw()
+            self.beads_canvas.clear()
+            self.beads_canvas.draw()
+            self.disp_canvas.clear()
+            self.disp_canvas.draw()
+            self.status_label.set_status("idle", "No data")
+            self.eta_label.setText("")
+            self.log_edit.clear()
+
     def on_experiment_changed(self, exp_id: str):
+        """Legacy hook — switching is now handled by save/load_from_experiment."""
         pass
 
     def on_activated(self):
         pass
+    
