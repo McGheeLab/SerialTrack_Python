@@ -13,6 +13,12 @@ Changes from v1
 - Added TrackingConfig.trajectory   (embeds TrajectoryConfig)
 - Removed duplicate GlobalSolver from regularization.py — single source of truth here
 - Fixed roi_slices() for the case where roi_x/roi_y are None before init
+
+Changes from v2
+----------------
+- Added DetectionMethod.STARDIST    (StarDist deep-learning bead detection)
+- Added StarDistConfig dataclass    (model selection, probability/NMS thresholds)
+- Added DetectionConfig.stardist    (embeds StarDistConfig)
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ class DetectionMethod(IntEnum):
     """Particle detection strategy."""
     TPT = 1       # Blob → centroid → radial symmetry sub-pixel
     TRACTRAC = 2  # LoG blob → local max → 2nd-order poly sub-pixel
+    STARDIST = 3  # StarDist deep-learning instance segmentation
 
 
 class GlobalSolver(IntEnum):
@@ -50,6 +57,67 @@ class TrackingMode(IntEnum):
     INCREMENTAL = 1
     CUMULATIVE = 2
     DOUBLE_FRAME = 3     # Independent frame-pair mode (was missing)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  StarDist config
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class StarDistConfig:
+    """StarDist-specific parameters for deep-learning bead detection.
+
+    StarDist predicts star-convex polygons (2D) or polyhedra (3D) for
+    each object instance, making it well-suited for round/spherical
+    fluorescent beads.
+
+    Pretrained models
+    -----------------
+    2D: '2D_versatile_fluo'  — fluorescence microscopy (recommended)
+        '2D_paper_dsb2018'   — Data Science Bowl 2018
+    3D: '3D_demo'            — demo 3D fluorescence model
+
+    Custom models can be loaded by setting ``model_name`` to the model
+    directory path and ``model_basedir`` to its parent directory.
+    """
+
+    model_name: str = "2D_versatile_fluo"
+    """Pretrained model name or path to custom model directory."""
+
+    model_basedir: Optional[str] = None
+    """Base directory for custom models. None → use pretrained model."""
+
+    prob_thresh: Optional[float] = None
+    """Probability threshold for object detection (None → model default).
+    Lower values detect more objects but may include noise.
+    Typical range: 0.3–0.7."""
+
+    nms_thresh: Optional[float] = None
+    """Non-maximum suppression (overlap) threshold (None → model default).
+    Lower values are more aggressive at removing overlapping detections.
+    Typical range: 0.3–0.5."""
+
+    normalize_input: bool = True
+    """Apply percentile-based normalization before prediction.
+    Recommended for raw microscopy images."""
+
+    norm_pmin: float = 1.0
+    """Lower percentile for input normalization."""
+
+    norm_pmax: float = 99.8
+    """Upper percentile for input normalization."""
+
+    scale: Optional[Tuple[float, ...]] = None
+    """Anisotropic scaling factors (e.g. (1, 1, 3.2) for Z-anisotropy).
+    None → isotropic. Only used for 3D predictions."""
+
+    n_tiles: Optional[Tuple[int, ...]] = None
+    """Tile the input image for memory-efficient prediction.
+    None → auto. E.g. (2, 2) for 2D or (1, 2, 2) for 3D."""
+
+    use_gpu: bool = True
+    """Use GPU acceleration if available (requires tensorflow-gpu or
+    compatible CUDA setup)."""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -77,6 +145,8 @@ class DetectionConfig:
     dccd: Tuple[float, ...] = (1.0, 1.0, 1.0)
     abc: Tuple[float, ...] = (1.0, 1.0, 1.0)
     rand_noise: float = 1e-7
+    # StarDist deep-learning detection
+    stardist: StarDistConfig = field(default_factory=StarDistConfig)
 
 
 # ═══════════════════════════════════════════════════════════════

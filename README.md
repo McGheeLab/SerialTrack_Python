@@ -4,6 +4,9 @@
 
 This repository contains the Matlab m-files to run our SerialTrack particle tracking algorithm. This code package includes both 2D and 3D particle tracking scripts for full-field 2D and 3D displacement fields, respectively. More details can be found in our SerialTrack paper (https://www.sciencedirect.com/science/article/pii/S2352711022001224).
   
+### Requirements
+pip install stardist tensorflow
+
 ### Important pages
 * [Download latest version v1.0!](https://github.com/FranckLab/SerialTrack/releases)
 * [Example data] (https://minds.wisconsin.edu/handle/1793/82901) 
